@@ -3,6 +3,8 @@ name: Build & Deploy
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 env:
@@ -10,12 +12,45 @@ env:
   IMAGE_NAME: ghcr.io/eugnmueller-87/pantheon
 
 jobs:
-  # ── 1. Build & push Docker image to GHCR ──────────────────
+  # ── 0. Quality Gate — must pass before anything ships ─────────
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt pytest-asyncio
+
+      - name: Run quality gate (144 tests)
+        run: pytest tests/ --tb=short -q --strict-markers
+        env:
+          # Agents that call external APIs must be mocked in tests.
+          # These placeholders prevent import errors; real calls are
+          # blocked by the mock layer in conftest.py.
+          ANTHROPIC_API_KEY: "test-placeholder"
+          UPSTASH_REDIS_REST_URL: "https://placeholder.upstash.io"
+          UPSTASH_REDIS_REST_TOKEN: "test-placeholder"
+          HERMES_API_KEY: "test-placeholder"
+          HERMES_BASE_URL: "https://placeholder.example.com"
+          TELEGRAM_BOT_TOKEN: "test-placeholder"
+          TELEGRAM_CHAT_ID: "0"
+
+  # ── 1. Build & push Docker image to GHCR ──────────────────────
   build:
+    needs: test          # ← blocked until quality gate passes
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
+
+    # Only build on pushes to main, not on PRs
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:
       - uses: actions/checkout@v4
@@ -42,11 +77,11 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # ── 2. Deploy to Hetzner via SSH ──────────────────────────
+  # ── 2. Deploy to Hetzner via SSH ──────────────────────────────
   deploy:
     needs: build
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:
       - name: Deploy to Hetzner
@@ -60,10 +95,11 @@ jobs:
             bash deploy.sh
             echo "Deployed $(date)"
 
-  # ── 3. Build & deploy React dashboard to Cloudflare Pages ─
+  # ── 3. Build & deploy React dashboard to Cloudflare Pages ─────
   deploy-frontend:
+    needs: test          # ← also blocked until quality gate passes
     runs-on: ubuntu-latest
-    needs: []       # independent — doesn't wait for backend
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:
       - uses: actions/checkout@v4

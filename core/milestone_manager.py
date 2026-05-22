@@ -165,16 +165,26 @@ class MilestoneManager:
     def update(self, equity: float) -> Optional[Stage]:
         """
         Call this every time Argus refreshes portfolio state.
-        Returns the new Stage if a milestone was just crossed, else None.
+        Returns the new Stage if a forward milestone was just crossed, else None.
+
+        Equity drops (drawdowns) silently revert the current stage but never
+        fire a vault alert — you don't get congratulated for losing money.
         """
         self._current_equity = equity
         if equity > self._peak_equity:
             self._peak_equity = equity
 
         new_stage = _stage_for_equity(equity)
-        if new_stage != self._current_stage and new_stage not in self._crossed_stages:
+        if new_stage == self._current_stage:
+            return None
+
+        # Upward crossing: equity rose into a new stage we haven't seen yet
+        stage_order = list(Stage)
+        is_forward = stage_order.index(new_stage) > stage_order.index(self._current_stage)
+        if is_forward and new_stage not in self._crossed_stages:
             return self._handle_milestone_crossing(new_stage, equity)
 
+        # Downward or already-crossed: silently adjust stage, no alert
         self._current_stage = new_stage
         return None
 
