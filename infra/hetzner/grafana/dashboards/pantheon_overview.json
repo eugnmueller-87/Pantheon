@@ -126,7 +126,7 @@
       "gridPos": { "x": 0, "y": 16, "w": 16, "h": 8 },
       "datasource": { "uid": "supabase-postgres" },
       "targets": [{
-        "rawSql": "SELECT recorded_at AS \"Time\", symbol AS \"Symbol\", side AS \"Side\", ROUND(confidence::numeric, 2) AS \"Confidence\", ROUND(position_pct * 100, 2) AS \"Size %\", ROUND(pnl_pct * 100, 2) AS \"P&L %\", CASE WHEN hit IS NULL THEN 'OPEN' WHEN hit THEN 'WIN' ELSE 'LOSS' END AS \"Result\", category AS \"Category\" FROM trades ORDER BY recorded_at DESC LIMIT 50",
+        "rawSql": "SELECT recorded_at AS \"Time\", symbol AS \"Symbol\", side::TEXT AS \"Side\", ROUND(confidence::numeric, 2) AS \"Confidence\", ROUND(position_pct * 100, 2) AS \"Size %\", ROUND(pnl_pct * 100, 2) AS \"P&L %\", CASE WHEN hit IS NULL THEN 'OPEN' WHEN hit THEN 'WIN' ELSE 'LOSS' END AS \"Result\", category::TEXT AS \"Category\" FROM trades ORDER BY recorded_at DESC LIMIT 50",
         "format": "table"
       }],
       "fieldConfig": {
