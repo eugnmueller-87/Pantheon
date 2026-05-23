@@ -25,10 +25,10 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: pip install -r requirements.txt pytest-asyncio
+        run: pip install -r requirements.txt pytest-asyncio pytest-timeout
 
       - name: Run quality gate (144 tests)
-        run: pytest tests/ --tb=short -q --strict-markers
+        run: pytest tests/ --tb=short -q --strict-markers --timeout=30 -v
         env:
           # Agents that call external APIs must be mocked in tests.
           # These placeholders prevent import errors; real calls are
