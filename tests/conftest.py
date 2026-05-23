@@ -42,3 +42,15 @@ def mock_yfinance():
     """Block all yfinance network calls globally across every test."""
     with patch("yfinance.Ticker", side_effect=_yfinance_ticker_factory):
         yield
+
+
+@pytest.fixture(autouse=True)
+def mock_upstash_redis():
+    """Block all Upstash Redis network calls globally across every test."""
+    mock_redis = MagicMock()
+    mock_redis.set.return_value = True
+    mock_redis.setex.return_value = True
+    mock_redis.lpush.return_value = 1
+    mock_redis.ltrim.return_value = True
+    with patch("upstash_redis.Redis", return_value=mock_redis):
+        yield mock_redis
