@@ -124,6 +124,7 @@ jobs:
         run: npm run build
 
       - name: Deploy to Cloudflare Pages
+        if: ${{ vars.CLOUDFLARE_READY == 'true' }}
         uses: cloudflare/pages-action@v1
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
