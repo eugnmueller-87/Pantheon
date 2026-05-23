@@ -27,7 +27,7 @@ def _filtered(category=SignalCategory.POSITIVE_NEWS, tickers=None) -> FilteredSi
         published_at=datetime.now(timezone.utc),
         category=category,
         severity=Severity.HIGH,
-        affected_tickers=tickers or ["AAPL"],
+        affected_tickers=["AAPL"] if tickers is None else tickers,
         raw_text="test",
         supplier="TestCorp",
     )

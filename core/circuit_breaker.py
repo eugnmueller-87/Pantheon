@@ -47,7 +47,7 @@ class CircuitBreaker:
         self._threshold  = failure_threshold
         self._window     = timedelta(seconds=window_seconds)
         self._reset_to   = timedelta(seconds=reset_timeout)
-        self._lock       = threading.Lock()
+        self._lock       = threading.RLock()
         self._failures:  dict[str, deque]   = defaultdict(deque)  # agent → timestamps
         self._opened_at: dict[str, Optional[datetime]] = defaultdict(lambda: None)
         self._state:     dict[str, str]     = defaultdict(lambda: "CLOSED")
