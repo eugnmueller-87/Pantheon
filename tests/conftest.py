@@ -10,9 +10,35 @@ Isolation rules:
 
 import os
 import pytest
+import pandas as pd
+from unittest.mock import patch, MagicMock
 
 # Block any accidental real API calls during tests
 os.environ.setdefault("ANTHROPIC_API_KEY",        "test-key-not-real")
 os.environ.setdefault("HERMES_API_KEY",            "test-key-not-real")
 os.environ.setdefault("UPSTASH_REDIS_REST_URL",    "https://mock-redis.upstash.io")
 os.environ.setdefault("UPSTASH_REDIS_REST_TOKEN",  "mock-token")
+
+
+def _make_ticker(close_values):
+    hist = pd.DataFrame({"Close": close_values})
+    ticker = MagicMock()
+    ticker.history.return_value = hist
+    return ticker
+
+
+def _yfinance_ticker_factory(symbol):
+    """Return realistic-enough fake data for any ticker."""
+    if symbol == "^VIX":
+        return _make_ticker([18.0])
+    if symbol == "SPY":
+        return _make_ticker([490.0, 495.0])
+    # Sector ETFs and everything else — two data points for return calc
+    return _make_ticker([100.0, 102.0])
+
+
+@pytest.fixture(autouse=True)
+def mock_yfinance():
+    """Block all yfinance network calls globally across every test."""
+    with patch("yfinance.Ticker", side_effect=_yfinance_ticker_factory):
+        yield
