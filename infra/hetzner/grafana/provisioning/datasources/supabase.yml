@@ -4,7 +4,7 @@ datasources:
   - name: Supabase
     type: postgres
     uid: supabase-postgres
-    url: ${SUPABASE_DB_HOST}:${SUPABASE_DB_PORT}
+    url: aws-0-eu-west-1.pooler.supabase.com:6543
     database: ${SUPABASE_DB_NAME}
     user: ${SUPABASE_DB_USER}
     secureJsonData:
