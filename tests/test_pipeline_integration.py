@@ -118,7 +118,8 @@ class TestVixSuppression:
                 return type('T', (), {'history': lambda *a, **kw: extreme_vix_hist})()
             return type('T', (), {'history': lambda *a, **kw: normal_hist})()
 
-        with patch('yfinance.Ticker', side_effect=ticker_factory):
+        with patch('yfinance.Ticker', side_effect=ticker_factory), \
+             patch('agents.artemis.yf.Ticker', side_effect=ticker_factory):
             t = TrendAgent(cache_ttl_seconds=0)
             for cat in [SignalCategory.POSITIVE_NEWS, SignalCategory.EARNINGS_SURPRISE,
                         SignalCategory.REGULATORY_ACTION]:

@@ -18,6 +18,9 @@ os.environ.setdefault("ANTHROPIC_API_KEY",        "test-key-not-real")
 os.environ.setdefault("HERMES_API_KEY",            "test-key-not-real")
 os.environ.setdefault("UPSTASH_REDIS_REST_URL",    "https://mock-redis.upstash.io")
 os.environ.setdefault("UPSTASH_REDIS_REST_TOKEN",  "mock-token")
+# Explicitly unset Supabase so PythiaAgent always uses SQLite in tests
+os.environ.pop("SUPABASE_URL", None)
+os.environ.pop("SUPABASE_SERVICE_ROLE_KEY", None)
 
 
 def _make_ticker(close_values):
@@ -32,7 +35,8 @@ def _yfinance_ticker_factory(symbol):
     if symbol == "^VIX":
         return _make_ticker([18.0])
     if symbol == "SPY":
-        return _make_ticker([490.0, 495.0])
+        # +5% return → clearly BULL, no suppression triggered
+        return _make_ticker([470.0, 494.0])
     # Sector ETFs and everything else — two data points for return calc
     return _make_ticker([100.0, 102.0])
 
