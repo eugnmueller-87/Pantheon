@@ -167,7 +167,7 @@ class PythiaAgent:
                 WHERE context_key = ? AND hit IS NOT NULL
             """, (key,)).fetchone()
         if row and row[0] >= _MIN_SAMPLES:
-            return {"n": row[0], "hit_rate": row[1] or 0.5}
+            return {"n": row[0], "hit_rate": row[1] if row[1] is not None else 0.5}
         return None
 
     # ── SQLite fallback ────────────────────────────────────────────────────────

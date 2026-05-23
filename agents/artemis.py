@@ -108,10 +108,12 @@ class ArtemisAgent:
 
     def _apply_suppression(self, ctx: MacroContext, signal: FilteredSignal) -> MacroContext:
         from core.types import SignalCategory
-        if signal.category == SignalCategory.POSITIVE_NEWS and ctx.is_bear and ctx.is_high_volatility:
-            ctx.suppress        = True
-            ctx.suppress_reason = f"Bear regime + VIX={ctx.vix:.1f}: suppressing positive signal"
-        elif ctx.vix >= _VIX_EXTREME:
-            ctx.suppress        = True
-            ctx.suppress_reason = f"Extreme VIX={ctx.vix:.1f}: all signals suppressed"
-        return ctx
+        import dataclasses
+        out = dataclasses.replace(ctx)
+        if signal.category == SignalCategory.POSITIVE_NEWS and out.is_bear and out.is_high_volatility:
+            out.suppress        = True
+            out.suppress_reason = f"Bear regime + VIX={out.vix:.1f}: suppressing positive signal"
+        elif out.vix >= _VIX_EXTREME:
+            out.suppress        = True
+            out.suppress_reason = f"Extreme VIX={out.vix:.1f}: all signals suppressed"
+        return out

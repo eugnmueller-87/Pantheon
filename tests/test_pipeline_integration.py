@@ -56,9 +56,15 @@ def _mock_price(price=150.0):
 @pytest.fixture
 def pipeline(tmp_path):
     """Full pipeline stack with isolated SQLite DB."""
+    trend = TrendAgent()
+    # Pre-warm the macro cache now, while the conftest yfinance mock is active
+    # (VIX=18, SPY bullish). Without this, the first analyze() call can happen
+    # inside _mock_price which patches yfinance.Ticker to a single flat price,
+    # making VIX=150 and triggering spurious suppression.
+    trend._get_context()
     return (
         HadesAgent(),
-        TrendAgent(),
+        trend,
         PatternAgent(db_path=tmp_path / "trades.db"),
         MockExecutionAgent(slippage_bps=0),
     )
