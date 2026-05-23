@@ -97,9 +97,9 @@ class CircuitBreaker:
             self._state[agent_name] = "CLOSED"
         logger.info("[CB] Circuit manually reset for %s.", agent_name)
 
-    def status(self) -> dict[str, str]:
+    def status(self) -> dict[str, dict[str, str]]:
         with self._lock:
-            return {name: self._get_state(name) for name in self._state}
+            return {name: {"state": self._get_state(name)} for name in self._state}
 
     # ------------------------------------------------------------------
     # Internal

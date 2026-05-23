@@ -40,7 +40,8 @@ def _yfinance_ticker_factory(symbol):
 @pytest.fixture(autouse=True)
 def mock_yfinance():
     """Block all yfinance network calls globally across every test."""
-    with patch("yfinance.Ticker", side_effect=_yfinance_ticker_factory):
+    with patch("yfinance.Ticker", side_effect=_yfinance_ticker_factory), \
+         patch("agents.artemis.yf.Ticker", side_effect=_yfinance_ticker_factory):
         yield
 
 

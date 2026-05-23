@@ -151,7 +151,7 @@ class TestCaching:
         with patch.object(trend, '_fetch_macro', side_effect=fake_fetch):
             trend._get_context()
 
-        assert len(fetch_calls) == 1  # stale → re-fetched
+        assert len(fetch_calls) == 2  # 1 for seed + 1 for stale re-fetch
 
 
 # ── Fallback on yfinance failure ───────────────────────────────────────────────
