@@ -103,8 +103,8 @@ class KnowledgeBase:
     # ------------------------------------------------------------------
 
     def store_decision(self, trace: DecisionTrace) -> None:
-        """Called by ZEUS after every pipeline run."""
-        doc = self._trace_to_text(trace)
+        """Called by ZEUS after every pipeline run — writes to Supabase + ChromaDB."""
+        doc  = self._trace_to_text(trace)
         meta = {
             "trace_id":   trace.trace_id,
             "signal_id":  trace.signal_id,
@@ -115,6 +115,11 @@ class KnowledgeBase:
             "pnl_pct":    trace.pnl_pct or 0.0,
             "timestamp":  trace.timestamp.isoformat(),
         }
+
+        # Always write to Supabase when configured (primary, durable store)
+        self._store_decision_supabase(trace)
+
+        # ChromaDB for vector similarity (local, optional)
         if self._decisions_col is not None:
             try:
                 self._decisions_col.upsert(
@@ -126,6 +131,43 @@ class KnowledgeBase:
             except Exception as exc:
                 logger.warning("[KB] ChromaDB store failed: %s", exc)
         self._fallback.append({"id": trace.trace_id, "doc": doc, "meta": meta})
+
+    def _store_decision_supabase(self, trace: DecisionTrace) -> None:
+        import os
+        if not (os.getenv("SUPABASE_URL") and os.getenv("SUPABASE_SERVICE_ROLE_KEY")):
+            return
+        try:
+            import core.supabase_client as supa
+            regime = trace.trend_regime or "unknown"
+            supa.insert_decision_trace({
+                "trace_id":           trace.trace_id,
+                "signal_id":          trace.signal_id or None,
+                "timestamp":          trace.timestamp.isoformat(),
+                "headline":           trace.headline,
+                "supplier":           trace.supplier,
+                "category":           trace.category,
+                "severity":           trace.severity,
+                "hades_passed":       trace.hades_passed,
+                "hades_notes":        list(trace.hades_notes),
+                "trend_suppressed":   trace.trend_suppressed,
+                "trend_regime":       regime if regime in ("bull","bear","sideways","unknown") else "unknown",
+                "trend_vix":          trace.trend_vix,
+                "pattern_confidence": trace.pattern_confidence,
+                "pattern_size_pct":   trace.pattern_size_pct,
+                "zeus_reasoning":     trace.zeus_reasoning,
+                "zeus_approved":      trace.zeus_approved,
+                "zeus_override":      trace.zeus_override,
+                "zeus_override_reason": trace.zeus_override_reason,
+                "trade_placed":       trace.trade_placed,
+                "symbol":             trace.symbol,
+                "side":               trace.side,
+                "fill_price":         trace.fill_price,
+                "pnl_pct":            trace.pnl_pct,
+                "killed_at_stage":    trace.killed_at_stage,
+                "kill_reason":        trace.kill_reason,
+            })
+        except Exception as exc:
+            logger.warning("[KB] Supabase decision trace failed: %s", exc)
 
     def update_outcome(self, trace_id: str, pnl_pct: float) -> None:
         """Called by Monitor when a trade closes — backfills P&L into the trace."""

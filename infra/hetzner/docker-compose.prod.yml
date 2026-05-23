@@ -3,13 +3,16 @@ version: "3.9"
 # Pantheon OS — Production Docker Compose (Hetzner CX21)
 # Frankfurt DC, 2 vCPU, 4 GB RAM
 #
-# Deploy:
-#   scp this file + .env to server, then:
-#   docker compose -f docker-compose.prod.yml up -d
+# Services:
+#   zeus        — trading pipeline (port 8080)
+#   dashboard   — FastAPI WebSocket backend (port 8081)
+#   grafana     — analytics dashboards (port 3000, proxied via nginx)
+#   redis       — local cache fallback
+#   nginx       — SSL termination + reverse proxy
 
 services:
 
-  # ── ZEUS Webhook Server ─────────────────────────────────────
+  # ── ZEUS Pipeline Server ────────────────────────────────────────
   zeus:
     image: ghcr.io/eugnmueller-87/pantheon:latest
     container_name: pantheon_zeus
@@ -21,7 +24,7 @@ services:
     environment:
       - TZ=Europe/Berlin
     volumes:
-      - zeus_knowledge:/app/knowledge    # agent skills .md files (read-only at runtime)
+      - zeus_knowledge:/app/knowledge
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 30s
@@ -33,7 +36,7 @@ services:
     networks:
       - pantheon
 
-  # ── Dashboard Backend ───────────────────────────────────────
+  # ── Dashboard Backend ───────────────────────────────────────────
   dashboard:
     image: ghcr.io/eugnmueller-87/pantheon:latest
     container_name: pantheon_dashboard
@@ -53,9 +56,42 @@ services:
     networks:
       - pantheon
 
-  # ── Redis (Upstash bridge cache — local fallback) ───────────
-  # NOTE: Production uses Upstash Redis (cloud). This is a local
-  # fallback for development on the server only.
+  # ── Grafana — Analytics Dashboards ─────────────────────────────
+  # Connects directly to Supabase Postgres as datasource.
+  # No ETL needed — Grafana reads your trades/portfolio tables live.
+  grafana:
+    image: grafana/grafana:11.0.0
+    container_name: pantheon_grafana
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SERVER_ROOT_URL=%(protocol)s://%(domain)s/grafana/
+      - GF_SERVER_SERVE_FROM_SUB_PATH=true
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-changeme}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_AUTH_ANONYMOUS_ENABLED=false
+      - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-piechart-panel
+      # Supabase Postgres connection (injected at startup via provisioning)
+      - SUPABASE_DB_HOST=${SUPABASE_DB_HOST}
+      - SUPABASE_DB_PORT=${SUPABASE_DB_PORT:-5432}
+      - SUPABASE_DB_NAME=${SUPABASE_DB_NAME:-postgres}
+      - SUPABASE_DB_USER=${SUPABASE_DB_USER:-postgres}
+      - SUPABASE_DB_PASSWORD=${SUPABASE_DB_PASSWORD}
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - pantheon
+
+  # ── Redis (local fallback cache) ────────────────────────────────
   redis:
     image: redis:7-alpine
     container_name: pantheon_redis
@@ -66,7 +102,7 @@ services:
     networks:
       - pantheon
 
-  # ── Nginx reverse proxy ─────────────────────────────────────
+  # ── Nginx reverse proxy ─────────────────────────────────────────
   nginx:
     image: nginx:alpine
     container_name: pantheon_nginx
@@ -76,16 +112,18 @@ services:
       - "443:443"
     volumes:
       - ./nginx.prod.conf:/etc/nginx/conf.d/default.conf:ro
-      - /etc/letsencrypt:/etc/letsencrypt:ro        # Certbot SSL certs
+      - /etc/letsencrypt:/etc/letsencrypt:ro
       - /var/www/certbot:/var/www/certbot:ro
     depends_on:
       - zeus
       - dashboard
+      - grafana
     networks:
       - pantheon
 
 volumes:
   zeus_knowledge:
+  grafana_data:
   redis_data:
 
 networks:

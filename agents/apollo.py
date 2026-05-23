@@ -164,6 +164,16 @@ class ApolloAgent:
             logger.warning("[APOLLO] %s", msg)
             summary["errors"].append(msg)
 
+        # 5. QuantStats daily performance report
+        try:
+            report_path = self._generate_quantstats_report()
+            if report_path:
+                summary["report_path"] = report_path
+        except Exception as exc:
+            msg = f"QuantStats report failed: {exc}"
+            logger.warning("[APOLLO] %s", msg)
+            summary["errors"].append(msg)
+
         self._last_run   = datetime.now(timezone.utc)
         self._last_error = summary["errors"][0] if summary["errors"] else None
         summary["finished_at"] = self._last_run.isoformat()
@@ -173,6 +183,86 @@ class ApolloAgent:
             summary["traces_analysed"], len(summary["errors"]),
         )
         return summary
+
+    # ------------------------------------------------------------------
+    # QuantStats daily performance report
+    # ------------------------------------------------------------------
+
+    def _generate_quantstats_report(self) -> Optional[str]:
+        """
+        Pull closed trades from Supabase, build a returns series,
+        generate a QuantStats HTML tear sheet, and send the path via Telegram.
+        Skips gracefully if quantstats or Supabase are not available.
+        """
+        import os
+        if not (os.getenv("SUPABASE_URL") and os.getenv("SUPABASE_SERVICE_ROLE_KEY")):
+            logger.info("[APOLLO] Supabase not configured — skipping QuantStats report.")
+            return None
+
+        try:
+            import quantstats as qs
+            import pandas as pd
+        except ImportError:
+            logger.info("[APOLLO] quantstats not installed — skipping report.")
+            return None
+
+        import core.supabase_client as supa
+        trades = supa.get_trades_for_report(days=90)
+        if not trades:
+            logger.info("[APOLLO] No closed trades yet — skipping QuantStats report.")
+            return None
+
+        # Build a daily returns series from closed trades
+        df = pd.DataFrame(trades)
+        df["closed_at"] = pd.to_datetime(df["closed_at"], utc=True)
+        df = df.dropna(subset=["pnl_pct", "closed_at"])
+        df = df.sort_values("closed_at")
+
+        # Group by day, sum P&L (portfolio-level daily return)
+        daily = df.groupby(df["closed_at"].dt.date)["pnl_pct"].sum()
+        returns = pd.Series(daily.values, index=pd.to_datetime(daily.index))
+
+        if len(returns) < 5:
+            logger.info("[APOLLO] Fewer than 5 trading days — skipping report.")
+            return None
+
+        # Generate HTML tear sheet
+        report_dir  = Path("data/reports")
+        report_dir.mkdir(parents=True, exist_ok=True)
+        report_path = report_dir / f"pantheon_{datetime.now(timezone.utc).strftime('%Y%m%d')}.html"
+
+        qs.extend_pandas()
+        qs.reports.html(
+            returns,
+            output=str(report_path),
+            title="Pantheon OS — Daily Performance Report",
+            benchmark=None,
+        )
+        logger.info("[APOLLO] QuantStats report generated: %s", report_path)
+
+        # Send Telegram notification
+        telegram_token   = os.getenv("TELEGRAM_BOT_TOKEN")
+        telegram_chat_id = os.getenv("TELEGRAM_CHAT_ID")
+        if telegram_token and telegram_chat_id:
+            try:
+                win_rate = (df["hit"] == True).mean() * 100
+                avg_pnl  = df["pnl_pct"].mean() * 100
+                msg = (
+                    f"📊 Pantheon Daily Report\n"
+                    f"Trades analysed: {len(df)}\n"
+                    f"Win rate: {win_rate:.1f}%\n"
+                    f"Avg P&L per trade: {avg_pnl:.2f}%\n"
+                    f"Report: {report_path.name}"
+                )
+                requests.post(
+                    f"https://api.telegram.org/bot{telegram_token}/sendMessage",
+                    json={"chat_id": telegram_chat_id, "text": msg},
+                    timeout=5,
+                )
+            except Exception as exc:
+                logger.warning("[APOLLO] Telegram report notification failed: %s", exc)
+
+        return str(report_path)
 
     def get_ticker(self, supplier_name: str) -> Optional[str]:
         """

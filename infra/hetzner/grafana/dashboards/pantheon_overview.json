@@ -1,0 +1,162 @@
+{
+  "title": "Pantheon OS — Trading Overview",
+  "uid": "pantheon-overview",
+  "tags": ["pantheon", "trading"],
+  "timezone": "Europe/Berlin",
+  "refresh": "10s",
+  "schemaVersion": 38,
+  "panels": [
+
+    {
+      "id": 1,
+      "title": "Equity Curve",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 0, "w": 16, "h": 8 },
+      "datasource": { "uid": "supabase-postgres" },
+      "targets": [{
+        "rawSql": "SELECT refreshed_at AS time, total_equity AS \"Equity (€)\", peak_equity AS \"Peak\" FROM portfolio_state WHERE refreshed_at > NOW() - INTERVAL '7 days' ORDER BY refreshed_at ASC",
+        "format": "time_series"
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyEUR",
+          "color": { "mode": "palette-classic" }
+        }
+      }
+    },
+
+    {
+      "id": 2,
+      "title": "Current Drawdown %",
+      "type": "gauge",
+      "gridPos": { "x": 16, "y": 0, "w": 4, "h": 4 },
+      "datasource": { "uid": "supabase-postgres" },
+      "targets": [{
+        "rawSql": "SELECT current_drawdown_pct * 100 AS value FROM portfolio_state ORDER BY refreshed_at DESC LIMIT 1",
+        "format": "table"
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0, "max": 15,
+          "thresholds": {
+            "steps": [
+              { "color": "green", "value": 0 },
+              { "color": "yellow", "value": 5 },
+              { "color": "red", "value": 8 }
+            ]
+          }
+        }
+      }
+    },
+
+    {
+      "id": 3,
+      "title": "Total Equity",
+      "type": "stat",
+      "gridPos": { "x": 16, "y": 4, "w": 4, "h": 4 },
+      "datasource": { "uid": "supabase-postgres" },
+      "targets": [{
+        "rawSql": "SELECT total_equity AS value FROM portfolio_state ORDER BY refreshed_at DESC LIMIT 1",
+        "format": "table"
+      }],
+      "fieldConfig": {
+        "defaults": { "unit": "currencyEUR", "color": { "mode": "thresholds" },
+          "thresholds": { "steps": [{ "color": "green", "value": 0 }] }
+        }
+      }
+    },
+
+    {
+      "id": 4,
+      "title": "Win Rate by Signal Category",
+      "type": "barchart",
+      "gridPos": { "x": 0, "y": 8, "w": 10, "h": 8 },
+      "datasource": { "uid": "supabase-postgres" },
+      "targets": [{
+        "rawSql": "SELECT category, ROUND(win_rate * 100, 1) AS \"Win Rate %\", total_trades FROM get_win_rates_by_category() WHERE total_trades >= 5",
+        "format": "table"
+      }]
+    },
+
+    {
+      "id": 5,
+      "title": "Where Signals Die (Kill Stage Distribution)",
+      "type": "piechart",
+      "gridPos": { "x": 10, "y": 8, "w": 6, "h": 8 },
+      "datasource": { "uid": "supabase-postgres" },
+      "targets": [{
+        "rawSql": "SELECT killed_at_stage AS \"Stage\", count AS \"Count\" FROM get_kill_stage_stats()",
+        "format": "table"
+      }]
+    },
+
+    {
+      "id": 6,
+      "title": "Agent Health",
+      "type": "table",
+      "gridPos": { "x": 16, "y": 8, "w": 8, "h": 8 },
+      "datasource": { "uid": "supabase-postgres" },
+      "targets": [{
+        "rawSql": "SELECT agent_name AS \"Agent\", status AS \"Status\", checked_at AS \"Last Check\" FROM get_agent_health_summary() ORDER BY agent_name",
+        "format": "table"
+      }],
+      "fieldConfig": {
+        "overrides": [{
+          "matcher": { "id": "byName", "options": "Status" },
+          "properties": [{
+            "id": "custom.displayMode",
+            "value": "color-background"
+          }, {
+            "id": "mappings",
+            "value": [
+              { "type": "value", "options": { "healthy":  { "color": "green",  "index": 0 } } },
+              { "type": "value", "options": { "degraded": { "color": "yellow", "index": 1 } } },
+              { "type": "value", "options": { "failed":   { "color": "red",    "index": 2 } } }
+            ]
+          }]
+        }]
+      }
+    },
+
+    {
+      "id": 7,
+      "title": "Recent Trades",
+      "type": "table",
+      "gridPos": { "x": 0, "y": 16, "w": 16, "h": 8 },
+      "datasource": { "uid": "supabase-postgres" },
+      "targets": [{
+        "rawSql": "SELECT recorded_at AS \"Time\", symbol AS \"Symbol\", side AS \"Side\", ROUND(confidence::numeric, 2) AS \"Confidence\", ROUND(position_pct * 100, 2) AS \"Size %\", ROUND(pnl_pct * 100, 2) AS \"P&L %\", CASE WHEN hit IS NULL THEN 'OPEN' WHEN hit THEN 'WIN' ELSE 'LOSS' END AS \"Result\", category AS \"Category\" FROM trades ORDER BY recorded_at DESC LIMIT 50",
+        "format": "table"
+      }],
+      "fieldConfig": {
+        "overrides": [{
+          "matcher": { "id": "byName", "options": "Result" },
+          "properties": [{
+            "id": "custom.displayMode", "value": "color-background"
+          }, {
+            "id": "mappings",
+            "value": [
+              { "type": "value", "options": { "WIN":  { "color": "green",  "index": 0 } } },
+              { "type": "value", "options": { "LOSS": { "color": "red",    "index": 1 } } },
+              { "type": "value", "options": { "OPEN": { "color": "blue",   "index": 2 } } }
+            ]
+          }]
+        }]
+      }
+    },
+
+    {
+      "id": 8,
+      "title": "Monthly Returns",
+      "type": "barchart",
+      "gridPos": { "x": 16, "y": 16, "w": 8, "h": 8 },
+      "datasource": { "uid": "supabase-postgres" },
+      "targets": [{
+        "rawSql": "SELECT month AS \"Month\", ROUND(win_rate * 100, 1) AS \"Win Rate %\", ROUND(avg_pnl_pct * 100, 2) AS \"Avg P&L %\" FROM get_monthly_returns() ORDER BY month ASC",
+        "format": "table"
+      }]
+    }
+
+  ]
+}

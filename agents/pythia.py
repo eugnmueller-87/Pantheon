@@ -1,13 +1,16 @@
 """
 Agent 4 — Pythia: Pattern Learning & Position Sizing
 The Oracle of Delphi — reads patterns, predicts outcomes.
-SQLite trade log + Kelly-inspired sizing.
+
+Storage: Supabase (primary) with SQLite fallback when SUPABASE_URL is not set.
+This allows local development without a Supabase account.
 Imports only from core.types — never from other agents.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import sqlite3
 import uuid
 from datetime import datetime, timezone
@@ -22,21 +25,36 @@ from core.agent_knowledge import AgentKnowledgeBase
 
 logger = logging.getLogger("pythia")
 
-DB_PATH              = Path("data/trade_log.db")
-_MIN_SAMPLES         = 10
-_DEFAULT_SIZE_PCT    = 0.02
-_MIN_CONFIDENCE      = 0.45
+DB_PATH           = Path("data/trade_log.db")
+_MIN_SAMPLES      = 10
+_DEFAULT_SIZE_PCT = 0.02
+_MIN_CONFIDENCE   = 0.45
 
 
 class PythiaAgent:
     def __init__(self, db_path: Path = DB_PATH, milestone_manager=None):
-        self.db_path   = db_path
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._init_db()
-        self._milestone = milestone_manager   # injected by ZEUS
-        self.kb = AgentKnowledgeBase("pythia")
+        self.db_path        = db_path
+        self._milestone     = milestone_manager
+        self.kb             = AgentKnowledgeBase("pythia")
+        self._use_supabase  = bool(
+            os.getenv("SUPABASE_URL") and os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+        )
+
+        if self._use_supabase:
+            logger.info("[PYTHIA] Using Supabase for trade storage.")
+        else:
+            logger.info("[PYTHIA] No Supabase config — falling back to SQLite.")
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
+            self._init_db()
 
     def health(self) -> AgentHealth:
+        if self._use_supabase:
+            try:
+                import core.supabase_client as supa
+                supa.get_client()
+                return AgentHealth.HEALTHY
+            except Exception:
+                return AgentHealth.DEGRADED
         try:
             with sqlite3.connect(self.db_path) as conn:
                 conn.execute("SELECT 1")
@@ -60,10 +78,8 @@ class PythiaAgent:
 
         # Milestone hard cap — never exceed stage's max position size
         if self._milestone:
-            stage_cfg     = self._milestone.config
-            position_pct  = min(position_pct, stage_cfg.max_position_pct)
-            # Block signal if conviction tier not allowed at this stage
-            # Tier 1 = confidence >= 0.70, Tier 2 = >= 0.55, Tier 3 = >= 0.45
+            stage_cfg    = self._milestone.config
+            position_pct = min(position_pct, stage_cfg.max_position_pct)
             tier = 1 if confidence >= 0.70 else 2 if confidence >= 0.55 else 3
             if tier not in stage_cfg.allowed_tiers:
                 return SizedSignal(
@@ -84,37 +100,77 @@ class PythiaAgent:
         )
 
     def record_trade(self, sized: SizedSignal, result: TradeResult) -> None:
-        key = self._context_key(sized.original, sized.macro)
-        hit = (result.pnl_pct > 0) if result.pnl_pct is not None else None
-        self._insert_trade(
-            trade_id      = result.order_id or str(uuid.uuid4()),
-            signal_id     = sized.signal_id,
-            context_key   = key,
-            category      = sized.category.value,
-            regime        = sized.macro.regime.value if hasattr(sized.macro.regime, "value") else str(sized.macro.regime),
-            vix_band      = self._vix_band(sized.macro.vix),
-            confidence    = sized.confidence,
-            position_pct  = sized.position_size_pct,
-            symbol        = result.symbol,
-            side          = result.side,
-            fill_price    = result.fill_price,
-            pnl_pct       = result.pnl_pct,
-            hit           = hit,
-            recorded_at   = datetime.now(timezone.utc).isoformat(),
-        )
+        key    = self._context_key(sized.original, sized.macro)
+        hit    = (result.pnl_pct > 0) if result.pnl_pct is not None else None
+        regime = sized.macro.regime.value if hasattr(sized.macro.regime, "value") else str(sized.macro.regime)
 
-    @staticmethod
-    def _context_key(signal: FilteredSignal, macro: MacroContext) -> str:
-        regime   = macro.regime.value if hasattr(macro.regime, "value") else str(macro.regime)
-        vix_band = PythiaAgent._vix_band(macro.vix)
-        return f"{signal.category.value}|{regime}|{vix_band}"
+        if self._use_supabase:
+            self._insert_supabase(sized, result, key, hit, regime)
+        else:
+            self._insert_sqlite(
+                trade_id    = result.order_id or str(uuid.uuid4()),
+                signal_id   = sized.signal_id,
+                context_key = key,
+                category    = sized.category.value,
+                regime      = regime,
+                vix_band    = self._vix_band(sized.macro.vix),
+                confidence  = sized.confidence,
+                position_pct= sized.position_size_pct,
+                symbol      = result.symbol,
+                side        = result.side,
+                fill_price  = result.fill_price,
+                pnl_pct     = result.pnl_pct,
+                hit         = hit,
+                recorded_at = datetime.now(timezone.utc).isoformat(),
+            )
 
-    @staticmethod
-    def _vix_band(vix: float) -> str:
-        if vix < 15:  return "low"
-        if vix < 25:  return "medium"
-        if vix < 35:  return "high"
-        return "extreme"
+    # ── Storage backends ───────────────────────────────────────────────────────
+
+    def _insert_supabase(self, sized: SizedSignal, result: TradeResult, key: str, hit, regime: str) -> None:
+        import core.supabase_client as supa
+        supa.insert_trade({
+            "order_id":    result.order_id or str(uuid.uuid4()),
+            "signal_id":   sized.signal_id or None,
+            "context_key": key,
+            "category":    sized.category.value,
+            "regime":      regime,
+            "vix_band":    self._vix_band(sized.macro.vix),
+            "confidence":  sized.confidence,
+            "position_pct": sized.position_size_pct,
+            "symbol":      result.symbol,
+            "side":        result.side,
+            "fill_price":  result.fill_price,
+            "pnl_pct":     result.pnl_pct,
+            "hit":         hit,
+            "paper_trading": True,
+            "recorded_at": datetime.now(timezone.utc).isoformat(),
+        })
+
+    def _lookup_stats(self, key: str) -> Optional[dict]:
+        if self._use_supabase:
+            return self._lookup_stats_supabase(key)
+        return self._lookup_stats_sqlite(key)
+
+    def _lookup_stats_supabase(self, key: str) -> Optional[dict]:
+        import core.supabase_client as supa
+        row = supa.get_hit_rates(key)
+        if row and row.get("closed_trades", 0) >= _MIN_SAMPLES:
+            return {"n": row["closed_trades"], "hit_rate": row["hit_rate"] or 0.5}
+        return None
+
+    def _lookup_stats_sqlite(self, key: str) -> Optional[dict]:
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute("""
+                SELECT COUNT(*) AS n,
+                       AVG(CASE WHEN hit = 1 THEN 1.0 ELSE 0.0 END) AS hit_rate
+                FROM trades
+                WHERE context_key = ? AND hit IS NOT NULL
+            """, (key,)).fetchone()
+        if row and row[0] >= _MIN_SAMPLES:
+            return {"n": row[0], "hit_rate": row[1] or 0.5}
+        return None
+
+    # ── SQLite fallback ────────────────────────────────────────────────────────
 
     def _init_db(self) -> None:
         with sqlite3.connect(self.db_path) as conn:
@@ -139,21 +195,24 @@ class PythiaAgent:
             """)
             conn.commit()
 
-    def _insert_trade(self, **kwargs) -> None:
+    def _insert_sqlite(self, **kwargs) -> None:
         cols         = ", ".join(kwargs.keys())
         placeholders = ", ".join("?" for _ in kwargs)
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(f"INSERT INTO trades ({cols}) VALUES ({placeholders})", list(kwargs.values()))
             conn.commit()
 
-    def _lookup_stats(self, key: str) -> Optional[dict]:
-        with sqlite3.connect(self.db_path) as conn:
-            row = conn.execute("""
-                SELECT COUNT(*) AS n,
-                       AVG(CASE WHEN hit = 1 THEN 1.0 ELSE 0.0 END) AS hit_rate
-                FROM trades
-                WHERE context_key = ? AND hit IS NOT NULL
-            """, (key,)).fetchone()
-        if row and row[0] >= _MIN_SAMPLES:
-            return {"n": row[0], "hit_rate": row[1] or 0.5}
-        return None
+    # ── Helpers ────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _context_key(signal: FilteredSignal, macro: MacroContext) -> str:
+        regime   = macro.regime.value if hasattr(macro.regime, "value") else str(macro.regime)
+        vix_band = PythiaAgent._vix_band(macro.vix)
+        return f"{signal.category.value}|{regime}|{vix_band}"
+
+    @staticmethod
+    def _vix_band(vix: float) -> str:
+        if vix < 15: return "low"
+        if vix < 25: return "medium"
+        if vix < 35: return "high"
+        return "extreme"

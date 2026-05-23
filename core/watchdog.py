@@ -120,6 +120,8 @@ class Watchdog:
             checked_at=datetime.utcnow(),
         )
 
+        self._persist_health(reg.name, status)
+
         if status != reg.last_status:
             self._on_transition(reg, status)
         reg.last_status = status
@@ -163,6 +165,21 @@ class Watchdog:
             reg.last_restart_at = now
         except Exception as exc:
             logger.error("[WATCHDOG] Restart of %s failed: %s", reg.name, exc)
+
+    def _persist_health(self, agent_name: str, status: AgentHealth) -> None:
+        try:
+            import os
+            if not (os.getenv("SUPABASE_URL") and os.getenv("SUPABASE_SERVICE_ROLE_KEY")):
+                return
+            import core.supabase_client as supa
+            supa.insert_agent_health(
+                agent_name=agent_name,
+                status=status.value,
+                message="",
+                error_count=0,
+            )
+        except Exception:
+            pass  # Watchdog must never crash the pipeline
 
     def _send_alert(self, message: str) -> None:
         logger.warning(message)

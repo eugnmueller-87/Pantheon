@@ -1,0 +1,20 @@
+apiVersion: 1
+
+datasources:
+  - name: Supabase
+    type: postgres
+    uid: supabase-postgres
+    url: ${SUPABASE_DB_HOST}:${SUPABASE_DB_PORT}
+    database: ${SUPABASE_DB_NAME}
+    user: ${SUPABASE_DB_USER}
+    secureJsonData:
+      password: ${SUPABASE_DB_PASSWORD}
+    jsonData:
+      sslmode: require
+      maxOpenConns: 10
+      maxIdleConns: 5
+      connMaxLifetime: 14400
+      postgresVersion: 1500
+      timescaledb: false
+    isDefault: true
+    editable: false

@@ -20,6 +20,11 @@ from core.agent_knowledge import AgentKnowledgeBase
 
 logger = logging.getLogger("argus")
 
+_USE_SUPABASE = bool(
+    __import__("os").getenv("SUPABASE_URL") and
+    __import__("os").getenv("SUPABASE_SERVICE_ROLE_KEY")
+)
+
 
 @dataclass
 class PositionSnapshot:
@@ -82,6 +87,10 @@ class ArgusAgent:
 
         self._check_drawdown()
         self._state.refreshed_at = datetime.now(timezone.utc)
+
+        if _USE_SUPABASE:
+            self._persist_to_supabase()
+
         logger.info("[ARGUS] equity=%.2f drawdown=%.2f%% positions=%d",
                     self._state.total_equity,
                     self._state.current_drawdown_pct * 100,
@@ -150,6 +159,35 @@ class ArgusAgent:
             self.send_alert(msg)
             if self._on_kill:
                 self._on_kill(f"drawdown {dd*100:.1f}%")
+
+    def _persist_to_supabase(self) -> None:
+        try:
+            import core.supabase_client as supa
+            supa.upsert_portfolio_state({
+                "total_equity":         self._state.total_equity,
+                "peak_equity":          self._state.peak_equity,
+                "current_drawdown_pct": self._state.current_drawdown_pct,
+                "open_positions":       len(self._state.snapshots),
+                "paper_trading":        True,
+                "refreshed_at":         self._state.refreshed_at.isoformat(),
+            })
+            if self._state.snapshots:
+                positions = [
+                    {
+                        "symbol":             s.symbol,
+                        "side":               s.side,
+                        "qty":                s.qty,
+                        "avg_cost":           s.avg_cost,
+                        "current_price":      s.current_price,
+                        "unrealized_pnl":     s.unrealized_pnl,
+                        "unrealized_pnl_pct": s.unrealized_pnl_pct,
+                        "refreshed_at":       self._state.refreshed_at.isoformat(),
+                    }
+                    for s in self._state.snapshots
+                ]
+                supa.upsert_portfolio_positions(positions)
+        except Exception as exc:
+            logger.warning("[ARGUS] Supabase persist failed: %s", exc)
 
     def _get_connection(self):
         if self._ib is None or not self._ib.isConnected():
