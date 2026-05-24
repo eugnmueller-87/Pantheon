@@ -651,6 +651,12 @@ Respond in this exact JSON format — no markdown, no fences, raw JSON only:
         try:
             self._seniority_report = self.seniority.evaluate()
             logger.info("[ZEUS] Seniority: %s", self._seniority_report.summary_line())
+            if os.getenv("SUPABASE_URL") and os.getenv("SUPABASE_SERVICE_ROLE_KEY"):
+                import core.supabase_client as supa
+                supa.upsert_agent_seniority(
+                    scores={k: v.to_dict() for k, v in self._seniority_report.agents.items()},
+                    system_level_int=int(self._seniority_report.system_level),
+                )
         except Exception as exc:
             logger.warning("[ZEUS] Seniority evaluation failed: %s", exc)
 

@@ -283,6 +283,65 @@ def get_trades_for_report(days: int = 30) -> list[dict]:
         return []
 
 
+# ── Agent seniority ────────────────────────────────────────────────────────────
+
+def upsert_agent_seniority(scores: dict, system_level_int: int) -> None:
+    """
+    Persist seniority scores after each SeniorityEvaluator.evaluate() call.
+    Writes current state to agent_seniority and appends to history on level change.
+    """
+    try:
+        client = get_client()
+        now = datetime.now(timezone.utc).isoformat()
+
+        # Fetch existing levels so we only append history on actual promotions
+        existing_res = client.table("agent_seniority").select("agent_name, level_int").execute()
+        existing = {row["agent_name"]: row["level_int"] for row in (existing_res.data or [])}
+
+        rows = []
+        history_rows = []
+        for name, score in scores.items():
+            row = {
+                "agent_name":           name,
+                "level":                score["level"],
+                "level_int":            score["level_int"],
+                "cleared":              score["cleared"],
+                "criteria":             score["criteria"],
+                "notes":                score["notes"],
+                "max_position_pct":     _level_int_to_max_pos(score["level_int"]),
+                "live_trading_allowed": score["level_int"] >= 1,
+                "evaluated_at":         score["evaluated_at"],
+                "updated_at":           now,
+            }
+            rows.append(row)
+
+            prev_int = existing.get(name)
+            if prev_int is None or score["level_int"] != prev_int:
+                history_rows.append({
+                    "agent_name":  name,
+                    "from_level":  _int_to_level_label(prev_int) if prev_int is not None else None,
+                    "to_level":    score["level"],
+                    "level_int":   score["level_int"],
+                    "criteria":    score["criteria"],
+                    "promoted_at": now,
+                })
+
+        client.table("agent_seniority").upsert(rows, on_conflict="agent_name").execute()
+        if history_rows:
+            client.table("agent_seniority_history").insert(history_rows).execute()
+
+    except Exception as exc:
+        logger.error("[SUPABASE] upsert_agent_seniority failed: %s", exc)
+
+
+def _level_int_to_max_pos(level_int: int) -> float:
+    return {0: 0.03, 1: 0.05, 2: 0.05, 3: 0.05}.get(level_int, 0.03)
+
+
+def _int_to_level_label(level_int: int) -> str:
+    return {0: "Senior", 1: "Principal", 2: "Managing Director", 3: "Director"}.get(level_int, "Senior")
+
+
 def get_portfolio_equity_series(hours: int = 24) -> list[dict]:
     """Pull equity snapshots for the last N hours — Grafana equity chart."""
     try:
