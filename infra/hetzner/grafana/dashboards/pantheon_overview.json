@@ -165,7 +165,7 @@
       "gridPos": { "x": 0, "y": 24, "w": 14, "h": 8 },
       "datasource": { "uid": "supabase-postgres" },
       "targets": [{
-        "rawSql": "SELECT agent_name AS \"Agent\", seniority_level AS \"Level\", level_int AS \"Score\", live_trading_ok AS \"Live OK\", evaluated_at AS \"Evaluated\" FROM agent_seniority ORDER BY level_int DESC, agent_name ASC",
+        "rawSql": "SELECT agent_name AS \"Agent\", level::TEXT AS \"Level\", level_int AS \"Score\", live_trading_allowed AS \"Live OK\", evaluated_at AS \"Evaluated\" FROM agent_seniority ORDER BY level_int DESC, agent_name ASC",
         "format": "table"
       }],
       "fieldConfig": {
@@ -178,11 +178,10 @@
             }, {
               "id": "mappings",
               "value": [
-                { "type": "value", "options": { "Director":   { "color": "purple", "index": 0 } } },
-                { "type": "value", "options": { "Principal":  { "color": "blue",   "index": 1 } } },
-                { "type": "value", "options": { "Senior":     { "color": "green",  "index": 2 } } },
-                { "type": "value", "options": { "Junior":     { "color": "yellow", "index": 3 } } },
-                { "type": "value", "options": { "Trainee":    { "color": "red",    "index": 4 } } }
+                { "type": "value", "options": { "Director":          { "color": "purple", "index": 0 } } },
+                { "type": "value", "options": { "Managing Director": { "color": "blue",   "index": 1 } } },
+                { "type": "value", "options": { "Principal":         { "color": "semi-dark-blue", "index": 2 } } },
+                { "type": "value", "options": { "Senior":            { "color": "green",  "index": 3 } } }
               ]
             }]
           },
@@ -210,7 +209,7 @@
       "gridPos": { "x": 14, "y": 24, "w": 5, "h": 4 },
       "datasource": { "uid": "supabase-postgres" },
       "targets": [{
-        "rawSql": "SELECT system_level AS value FROM system_seniority ORDER BY evaluated_at DESC LIMIT 1",
+        "rawSql": "SELECT system_level AS value FROM system_seniority",
         "format": "table"
       }],
       "fieldConfig": {
@@ -243,7 +242,7 @@
       "gridPos": { "x": 19, "y": 24, "w": 5, "h": 4 },
       "datasource": { "uid": "supabase-postgres" },
       "targets": [{
-        "rawSql": "SELECT CASE WHEN live_trading_ok THEN 'YES' ELSE 'NO' END AS value FROM system_seniority ORDER BY evaluated_at DESC LIMIT 1",
+        "rawSql": "SELECT CASE WHEN live_trading_allowed THEN 'YES' ELSE 'NO' END AS value FROM system_seniority",
         "format": "table"
       }],
       "fieldConfig": {
@@ -265,7 +264,7 @@
       "gridPos": { "x": 14, "y": 28, "w": 10, "h": 4 },
       "datasource": { "uid": "supabase-postgres" },
       "targets": [{
-        "rawSql": "SELECT max_position_pct * 100 AS value FROM system_seniority ORDER BY evaluated_at DESC LIMIT 1",
+        "rawSql": "SELECT max_position_pct * 100 AS value FROM system_seniority",
         "format": "table"
       }],
       "fieldConfig": {
