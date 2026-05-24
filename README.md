@@ -29,7 +29,7 @@
 | Agent status | `https://moremanamoreproblems.de/api/agents` |
 | Grafana dashboard | `https://moremanamoreproblems.de/grafana/` |
 | WebSocket feed | `wss://moremanamoreproblems.de/ws` |
-| React dashboard (CDN) | `https://pantheon-dashboard-ban.pages.dev` |
+| React dashboard (CDN) | Cloudflare Pages (see GitHub secrets) |
 
 ---
 

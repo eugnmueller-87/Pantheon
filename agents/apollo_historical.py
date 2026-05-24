@@ -276,7 +276,7 @@ class HistoricalIngestionPipeline:
 
         # Fetch recent Form 4 filings
         url = f"https://data.sec.gov/submissions/CIK{cik.zfill(10)}.json"
-        headers = {"User-Agent": "ZEUS Trading System eugnmueller@googlemail.com"}
+        headers = {"User-Agent": f"ZEUS Trading System {os.getenv('EDGAR_USER_AGENT', 'pantheon-os@example.com')}"}
 
         try:
             resp = requests.get(url, headers=headers, timeout=15)
@@ -341,7 +341,7 @@ class HistoricalIngestionPipeline:
             url = "https://efts.sec.gov/LATEST/search-index"
             params = {"q": ticker, "dateRange": "custom",
                       "startdt": "2020-01-01", "forms": "4"}
-            headers = {"User-Agent": "ZEUS Trading System eugnmueller@googlemail.com"}
+            headers = {"User-Agent": f"ZEUS Trading System {os.getenv('EDGAR_USER_AGENT', 'pantheon-os@example.com')}"}
             resp = requests.get(url, params=params, headers=headers, timeout=10)
             if resp.status_code != 200:
                 return None
@@ -354,7 +354,7 @@ class HistoricalIngestionPipeline:
         # Fallback: company facts endpoint
         try:
             url = f"https://data.sec.gov/submissions/CIK{ticker}.json"
-            headers = {"User-Agent": "ZEUS Trading System eugnmueller@googlemail.com"}
+            headers = {"User-Agent": f"ZEUS Trading System {os.getenv('EDGAR_USER_AGENT', 'pantheon-os@example.com')}"}
             resp = requests.get(url, headers=headers, timeout=10)
             if resp.status_code == 200:
                 return resp.json().get("cik", "")
@@ -522,7 +522,7 @@ class HistoricalIngestionPipeline:
             return 0
 
         added = 0
-        headers = {"User-Agent": "ZEUS Trading System eugnmueller@googlemail.com"}
+        headers = {"User-Agent": f"ZEUS Trading System {os.getenv('EDGAR_USER_AGENT', 'pantheon-os@example.com')}"}
 
         for keyword in _SUPPLY_CHAIN_KEYWORDS[:3]:   # limit to 3 to avoid rate limiting
             try:
