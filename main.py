@@ -74,6 +74,10 @@ class ZeusHandler(BaseHTTPRequestHandler):
         elif self.path in ("/run/research", "/run/research/historical"):
             historical = self.path.endswith("/historical")
             self._handle_research(historical=historical)
+        elif self.path == "/run/backtest":
+            self._handle_backtest()
+        elif self.path == "/run/replay":
+            self._handle_replay()
         elif self.path == "/halt":
             self._handle_halt()
         elif self.path == "/resume":
@@ -110,6 +114,22 @@ class ZeusHandler(BaseHTTPRequestHandler):
             self._json_response(200, {"status": "ok", "historical": historical, "research": summary})
         except Exception as exc:
             logger.exception("[MAIN] /run/research failed")
+            self._json_response(500, {"error": str(exc)})
+
+    def _handle_backtest(self):
+        try:
+            summary = _zeus.run_backtest()
+            self._json_response(200, {"status": "ok", "backtest": summary})
+        except Exception as exc:
+            logger.exception("[MAIN] /run/backtest failed")
+            self._json_response(500, {"error": str(exc)})
+
+    def _handle_replay(self):
+        try:
+            summary = _zeus.run_replay()
+            self._json_response(200, {"status": "ok", "replay": summary})
+        except Exception as exc:
+            logger.exception("[MAIN] /run/replay failed")
             self._json_response(500, {"error": str(exc)})
 
     def _handle_halt(self):

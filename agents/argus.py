@@ -17,6 +17,7 @@ import requests
 
 from core.types import AgentHealth
 from core.agent_knowledge import AgentKnowledgeBase
+from core.shadow_learning import OutcomeResolver
 
 logger = logging.getLogger("argus")
 
@@ -66,7 +67,12 @@ class ArgusAgent:
         self._ib               = None
         self._milestone        = milestone_manager
         self._default_equity   = default_account_equity
-        self.kb = AgentKnowledgeBase("argus")
+        self.kb                = AgentKnowledgeBase("argus")
+        self.outcome_resolver  = OutcomeResolver()
+
+    def set_knowledge_base(self, knowledge_base) -> None:
+        """Wire the shared KB into the OutcomeResolver after construction."""
+        self.outcome_resolver = OutcomeResolver(knowledge_base=knowledge_base)
 
     def health(self) -> AgentHealth:
         return AgentHealth.HEALTHY

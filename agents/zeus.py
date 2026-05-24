@@ -136,6 +136,9 @@ class ZeusOrchestrator:
         )
         self.apollo    = ApolloAgent(knowledge_base=self.kb)
 
+        # Shadow learning layer — wire KB into Argus's OutcomeResolver
+        self.argus.set_knowledge_base(self.kb)
+
         # LLM client for reasoning step
         api_key = os.getenv("ANTHROPIC_API_KEY")
         if not api_key:
@@ -204,6 +207,87 @@ class ZeusOrchestrator:
         # Re-evaluate seniority after every research cycle — Apollo may have promoted agents
         self._run_seniority_evaluation()
         return result
+
+    def decide(self, sized) -> dict:
+        """
+        Expose the ZEUS LLM reasoning step as a standalone callable.
+        Used by ReplayEngine to re-evaluate past DecisionTraces without
+        going through the full pipeline.
+        Returns {"approved": bool, "reasoning": str}.
+        """
+        from core.types import DecisionTrace
+        import uuid
+        dummy_trace = DecisionTrace(
+            trace_id=str(uuid.uuid4()),
+            signal_id=None,
+            timestamp=__import__("datetime").datetime.now(__import__("datetime").timezone.utc),
+            headline=sized.original.headline if sized.original else "",
+            supplier=sized.original.supplier if sized.original else "",
+            category=sized.original.category.value if sized.original else "",
+            severity=sized.original.severity.value if sized.original else "",
+            hades_passed=True, hades_notes=[],
+            trend_suppressed=False, trend_regime=None, trend_vix=sized.macro.vix,
+            pattern_confidence=sized.confidence, pattern_size_pct=sized.position_size_pct,
+            zeus_reasoning="", zeus_approved=False, zeus_override=False,
+            zeus_override_reason=None, trade_placed=False,
+        )
+        try:
+            approved, reasoning, _ = self._zeus_evaluate(sized, sized.macro, dummy_trace)
+            return {"approved": approved, "reasoning": reasoning}
+        except Exception as exc:
+            logger.warning("[ZEUS] decide() failed: %s", exc)
+            return {"approved": False, "reasoning": str(exc)}
+
+    def run_backtest(self) -> dict:
+        """
+        Replay historical KB entries through Hades → Pythia to pre-seed
+        context key statistics before paper trading begins.
+        Safe to run multiple times — synthetic trades are additive.
+        """
+        from core.shadow_learning import Backtester
+        from core.types import MacroContext, MarketRegime
+        from datetime import datetime, timezone
+
+        macro = MacroContext(
+            fetched_at=datetime.now(timezone.utc),
+            regime=MarketRegime.SIDEWAYS,
+            vix=18.0,
+            sp500_1m_return=0.0,
+        )
+        bt = Backtester(
+            hades_agent=self.hades,
+            pythia_agent=self.pythia,
+            macro_context=macro,
+        )
+        result = bt.run(self.kb)
+        logger.info("[ZEUS] Backtest complete: %s", result.summary())
+        return result.summary()
+
+    def run_replay(self, limit: int = 30) -> dict:
+        """
+        Re-run the last N DecisionTraces through current ZEUS reasoning.
+        Returns agreement rate and changed-mind cases for review.
+        """
+        from core.shadow_learning import ReplayEngine
+
+        engine  = ReplayEngine(zeus_agent=self)
+        results = engine.replay_recent(self.kb, limit=limit)
+        changed = [r for r in results if r.changed_mind()]
+        return {
+            "replayed":       len(results),
+            "agreement_rate": engine.agreement_rate(results),
+            "changed_mind":   len(changed),
+            "changed_cases":  [
+                {
+                    "trace_id":          r.trace_id,
+                    "was":               "APPROVED" if r.original_approved else "REJECTED",
+                    "now":               "APPROVED" if r.replay_approved else "REJECTED",
+                    "original_reasoning": r.original_reasoning[:200],
+                    "replay_reasoning":  r.replay_reasoning[:200],
+                }
+                for r in changed
+            ],
+        }
 
     def get_seniority_report(self) -> dict:
         """Return current seniority levels for all agents — safe to expose publicly."""
