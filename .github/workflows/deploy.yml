@@ -84,6 +84,18 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 
     steps:
+      - uses: actions/checkout@v4
+
+      - name: Copy infra files to server
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.HETZNER_SERVER_IP }}
+          username: pantheon
+          key: ${{ secrets.HETZNER_SSH_KEY }}
+          source: "infra/hetzner/docker-compose.prod.yml,infra/hetzner/nginx.prod.conf,infra/hetzner/grafana/"
+          target: /tmp/pantheon-infra
+          strip_components: 2
+
       - name: Deploy to Hetzner
         uses: appleboy/ssh-action@v1
         with:
@@ -91,6 +103,9 @@ jobs:
           username: pantheon
           key: ${{ secrets.HETZNER_SSH_KEY }}
           script: |
+            sudo cp /tmp/pantheon-infra/docker-compose.prod.yml /opt/pantheon/docker-compose.prod.yml
+            sudo cp /tmp/pantheon-infra/nginx.prod.conf /opt/pantheon/nginx.prod.conf
+            sudo cp -r /tmp/pantheon-infra/grafana/ /opt/pantheon/grafana/
             cd /opt/pantheon
             bash deploy.sh
             echo "Deployed $(date)"
