@@ -86,6 +86,8 @@ class AresAgent:
             raise ValueError(f"Could not price {symbol}")
 
         account_val = self._get_account_value(ib)
+        if account_val <= 0:
+            raise ValueError(f"Invalid account equity: {account_val}")
         qty         = max(1, int(account_val * sized.position_size_pct / mid))
         is_long     = sized.category != SignalCategory.SUPPLIER_DISRUPTION
         side        = "BUY" if is_long else "SELL"

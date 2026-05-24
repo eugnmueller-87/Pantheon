@@ -21,6 +21,7 @@ import logging
 import os
 import re
 import time
+import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -341,15 +342,19 @@ class ApolloAgent:
     @staticmethod
     def _parse_arxiv_atom(xml_text: str) -> list[dict]:
         papers = []
-        entries = re.findall(r"<entry>(.*?)</entry>", xml_text, re.DOTALL)
-        for entry in entries:
-            title = re.search(r"<title>(.*?)</title>", entry, re.DOTALL)
-            abstract = re.search(r"<summary>(.*?)</summary>", entry, re.DOTALL)
-            if title and abstract:
-                papers.append({
-                    "title":    title.group(1).strip().replace("\n", " "),
-                    "abstract": abstract.group(1).strip().replace("\n", " "),
-                })
+        try:
+            root = ET.fromstring(xml_text)
+            ns = {"atom": "http://www.w3.org/2005/Atom"}
+            for entry in root.findall("atom:entry", ns):
+                title_el    = entry.find("atom:title", ns)
+                summary_el  = entry.find("atom:summary", ns)
+                if title_el is not None and summary_el is not None:
+                    papers.append({
+                        "title":    (title_el.text or "").strip().replace("\n", " "),
+                        "abstract": (summary_el.text or "").strip().replace("\n", " "),
+                    })
+        except ET.ParseError as exc:
+            logger.warning("[APOLLO] arXiv XML parse error: %s", exc)
         return papers
 
     # ------------------------------------------------------------------

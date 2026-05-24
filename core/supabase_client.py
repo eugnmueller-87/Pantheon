@@ -334,19 +334,27 @@ def upsert_agent_seniority(scores: dict, system_level_int: int) -> None:
         logger.error("[SUPABASE] upsert_agent_seniority failed: %s", exc)
 
 
+_MAX_POS_BY_LEVEL: dict[int, float] = {0: 0.03, 1: 0.05, 2: 0.05, 3: 0.05}
+_LABEL_BY_LEVEL: dict[int, str]  = {0: "Senior", 1: "Principal", 2: "Managing Director", 3: "Director"}
+
+
 def _level_int_to_max_pos(level_int: int) -> float:
-    return {0: 0.03, 1: 0.05, 2: 0.05, 3: 0.05}.get(level_int, 0.03)
+    if level_int not in _MAX_POS_BY_LEVEL:
+        raise ValueError(f"Unknown seniority level_int: {level_int}")
+    return _MAX_POS_BY_LEVEL[level_int]
 
 
 def _int_to_level_label(level_int: int) -> str:
-    return {0: "Senior", 1: "Principal", 2: "Managing Director", 3: "Director"}.get(level_int, "Senior")
+    if level_int not in _LABEL_BY_LEVEL:
+        raise ValueError(f"Unknown seniority level_int: {level_int}")
+    return _LABEL_BY_LEVEL[level_int]
 
 
 def get_portfolio_equity_series(hours: int = 24) -> list[dict]:
     """Pull equity snapshots for the last N hours — Grafana equity chart."""
     try:
-        import datetime as dt
-        from_dt = (datetime.now(timezone.utc) - dt.timedelta(hours=hours)).isoformat()
+        from datetime import timedelta
+        from_dt = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
         res = (
             get_client()
             .table("portfolio_state")

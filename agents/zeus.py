@@ -15,8 +15,10 @@ All other agents import from core.types only.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -213,19 +215,17 @@ class ZeusOrchestrator:
         self._run_seniority_evaluation()
         return result
 
-    def decide(self, sized) -> dict:
+    def decide(self, sized: SizedSignal) -> dict:
         """
         Expose the ZEUS LLM reasoning step as a standalone callable.
         Used by ReplayEngine to re-evaluate past DecisionTraces without
         going through the full pipeline.
         Returns {"approved": bool, "reasoning": str}.
         """
-        from core.types import DecisionTrace
-        import uuid
         dummy_trace = DecisionTrace(
             trace_id=str(uuid.uuid4()),
             signal_id=None,
-            timestamp=__import__("datetime").datetime.now(__import__("datetime").timezone.utc),
+            timestamp=datetime.now(timezone.utc),
             headline=sized.original.headline if sized.original else "",
             supplier=sized.original.supplier if sized.original else "",
             category=sized.original.category.value if sized.original else "",
@@ -492,9 +492,21 @@ class ZeusOrchestrator:
             f"{sized.category.value} signal in {macro.regime} market, "
             f"VIX {macro.vix:.1f}, supplier {sized.supplier}"
         )
-        knowledge_chunks = self.kb.query_knowledge(kb_query, n_results=5)
-        past_decisions   = self.kb.query_similar_decisions(kb_query, n_results=4)
-        outcome_stats    = self.kb.query_outcomes_by_context(sized.category.value, trace.trend_regime)
+        try:
+            knowledge_chunks = self.kb.query_knowledge(kb_query, n_results=5)
+        except Exception as exc:
+            logger.warning("[ZEUS] KB knowledge query failed: %s", exc)
+            knowledge_chunks = []
+        try:
+            past_decisions = self.kb.query_similar_decisions(kb_query, n_results=4)
+        except Exception as exc:
+            logger.warning("[ZEUS] KB decisions query failed: %s", exc)
+            past_decisions = []
+        try:
+            outcome_stats = self.kb.query_outcomes_by_context(sized.category.value, trace.trend_regime)
+        except Exception as exc:
+            logger.warning("[ZEUS] KB outcomes query failed: %s", exc)
+            outcome_stats = "unavailable"
 
         # Portfolio concentration context — Director must see the whole book
         open_positions   = self.argus.open_position_count()
@@ -583,7 +595,6 @@ Respond in this exact JSON format — no markdown, no fences, raw JSON only:
 }}"""
 
         try:
-            import json, re
             response = self._claude.messages.create(
                 model="claude-haiku-4-5-20251001",
                 max_tokens=800,   # Director reasoning needs room — 3-5 sentences + flags
