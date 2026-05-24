@@ -26,9 +26,9 @@ from core.agent_knowledge import AgentKnowledgeBase
 logger = logging.getLogger("pythia")
 
 DB_PATH           = Path("data/trade_log.db")
-_MIN_SAMPLES      = 10
-_DEFAULT_SIZE_PCT = 0.02
-_MIN_CONFIDENCE   = 0.45
+_MIN_SAMPLES      = int(os.getenv("PYTHIA_MIN_SAMPLES", "10"))
+_DEFAULT_SIZE_PCT = float(os.getenv("PYTHIA_DEFAULT_SIZE_PCT", "0.02"))
+_MIN_CONFIDENCE   = float(os.getenv("PYTHIA_MIN_CONFIDENCE", "0.45"))
 
 
 class PythiaAgent:

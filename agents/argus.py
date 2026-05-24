@@ -57,6 +57,8 @@ class ArgusAgent:
         telegram_chat_id:       Optional[str]                  = None,
         milestone_manager = None,   # MilestoneManager injected by ZEUS
         default_account_equity: float                          = 100_000.0,
+        ib_host:                str                            = "127.0.0.1",
+        ib_port:                int                            = 7497,
     ):
         self.max_drawdown_pct  = max_drawdown_pct
         self._on_kill          = on_kill
@@ -65,6 +67,8 @@ class ArgusAgent:
         self._telegram_chat_id = telegram_chat_id or os.getenv("TELEGRAM_CHAT_ID")
         self._state            = PortfolioState()
         self._ib               = None
+        self._ib_host          = ib_host
+        self._ib_port          = ib_port
         self._milestone        = milestone_manager
         self._default_equity   = default_account_equity
         self.kb                = AgentKnowledgeBase("argus")
@@ -207,5 +211,5 @@ class ArgusAgent:
         if self._ib is None or not self._ib.isConnected():
             from ib_insync import IB
             self._ib = IB()
-            self._ib.connect("127.0.0.1", 7497, clientId=2)
+            self._ib.connect(self._ib_host, self._ib_port, clientId=2)
         return self._ib

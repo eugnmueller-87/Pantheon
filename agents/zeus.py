@@ -135,6 +135,8 @@ class ZeusOrchestrator:
             alert_fn=self._send_alert,
             milestone_manager=self.milestone,
             default_account_equity=self.config.default_account_equity,
+            ib_host=os.getenv("IB_HOST", "127.0.0.1"),
+            ib_port=int(os.getenv("IB_PORT", "7497")),
         )
         self.apollo    = ApolloAgent(knowledge_base=self.kb)
 

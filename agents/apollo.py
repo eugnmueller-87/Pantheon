@@ -36,7 +36,7 @@ logger = logging.getLogger("apollo")
 # arXiv q-fin categories most relevant to ZEUS
 _ARXIV_CATEGORIES = ["q-fin.TR", "q-fin.PM", "q-fin.ST", "q-fin.RM"]
 _ARXIV_API        = "https://export.arxiv.org/api/query"
-_ARXIV_MAX_PAPERS = 5   # per category per cycle — keeps latency low
+_ARXIV_MAX_PAPERS = int(os.getenv("APOLLO_ARXIV_MAX_PAPERS", "5"))  # per category per cycle
 
 # SSRN — search via public URL (no auth required for abstracts)
 _SSRN_SEARCH = "https://papers.ssrn.com/sol3/results.cfm"
@@ -51,7 +51,7 @@ _HERMES_BASE = os.getenv("HERMES_BASE_URL", "https://hermes-agent-production-114
 _TICKER_MAP_PATH = Path("data/ticker_map.json")
 
 # Self-improvement: analyse every N decision traces
-_SELF_IMPROVE_EVERY_N = 50
+_SELF_IMPROVE_EVERY_N = int(os.getenv("APOLLO_SELF_IMPROVE_N", "50"))
 
 _DEFAULT_TICKER_MAP: dict[str, str] = {
     # US Mega-cap
