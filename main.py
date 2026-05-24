@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -29,6 +30,8 @@ from core.logging_setup import configure_logging
 load_dotenv()   # loads .env file if present
 
 logger = logging.getLogger("main")
+
+_API_KEY = os.getenv("ZEUS_API_KEY")  # if unset → auth disabled (local dev)
 
 
 def build_zeus() -> ZeusOrchestrator:
@@ -58,6 +61,15 @@ class ZeusHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
         logger.debug("HTTP %s", format % args)
 
+    def _check_api_key(self) -> bool:
+        if not _API_KEY:
+            return True  # auth disabled in local dev
+        provided = self.headers.get("X-API-Key", "")
+        if provided != _API_KEY:
+            self._json_response(401, {"error": "unauthorized"})
+            return False
+        return True
+
     def do_GET(self):
         if self.path == "/status":
             self._handle_status()
@@ -69,6 +81,8 @@ class ZeusHandler(BaseHTTPRequestHandler):
             self._json_response(404, {"error": "not found"})
 
     def do_POST(self):
+        if not self._check_api_key():
+            return
         if self.path == "/run":
             self._handle_run()
         elif self.path in ("/run/research", "/run/research/historical"):

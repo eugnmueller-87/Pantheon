@@ -88,7 +88,7 @@ jobs:
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.HETZNER_SERVER_IP }}
-          username: root
+          username: pantheon
           key: ${{ secrets.HETZNER_SSH_KEY }}
           script: |
             cd /opt/pantheon
