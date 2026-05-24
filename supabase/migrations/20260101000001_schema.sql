@@ -36,7 +36,7 @@ CREATE TYPE trade_side AS ENUM ('BUY', 'SELL');
 
 CREATE TYPE position_side AS ENUM ('LONG', 'SHORT');
 
-CREATE TYPE circuit_breaker_state AS ENUM ('closed', 'open', 'half_open');
+CREATE TYPE cb_state AS ENUM ('closed', 'open', 'half_open');
 
 
 -- ============================================================
@@ -313,17 +313,17 @@ CREATE VIEW agent_health_latest AS
 -- 9. CIRCUIT_BREAKER_STATE  (per-agent CB snapshots)
 -- ============================================================
 
-CREATE TABLE circuit_breaker_state (
+CREATE TABLE circuit_breakers (
     cb_id           UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     agent_name      TEXT NOT NULL,
-    state           circuit_breaker_state NOT NULL DEFAULT 'closed',
+    state           cb_state NOT NULL DEFAULT 'closed',
     failure_count   INT NOT NULL DEFAULT 0,
     last_failure_at TIMESTAMPTZ,
     recorded_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_cb_state_agent_name  ON circuit_breaker_state(agent_name);
-CREATE INDEX idx_cb_state_recorded_at ON circuit_breaker_state(recorded_at DESC);
+CREATE INDEX idx_cb_agent_name  ON circuit_breakers(agent_name);
+CREATE INDEX idx_cb_recorded_at ON circuit_breakers(recorded_at DESC);
 
 
 -- ============================================================
@@ -395,7 +395,7 @@ ALTER TABLE decision_traces     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE portfolio_state     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE portfolio_positions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE agent_health        ENABLE ROW LEVEL SECURITY;
-ALTER TABLE circuit_breaker_state ENABLE ROW LEVEL SECURITY;
+ALTER TABLE circuit_breakers ENABLE ROW LEVEL SECURITY;
 ALTER TABLE knowledge_documents ENABLE ROW LEVEL SECURITY;
 ALTER TABLE ticker_map          ENABLE ROW LEVEL SECURITY;
 
@@ -408,7 +408,7 @@ CREATE POLICY "service_role_all" ON decision_traces     FOR ALL TO service_role 
 CREATE POLICY "service_role_all" ON portfolio_state     FOR ALL TO service_role USING (true) WITH CHECK (true);
 CREATE POLICY "service_role_all" ON portfolio_positions FOR ALL TO service_role USING (true) WITH CHECK (true);
 CREATE POLICY "service_role_all" ON agent_health        FOR ALL TO service_role USING (true) WITH CHECK (true);
-CREATE POLICY "service_role_all" ON circuit_breaker_state FOR ALL TO service_role USING (true) WITH CHECK (true);
+CREATE POLICY "service_role_all" ON circuit_breakers FOR ALL TO service_role USING (true) WITH CHECK (true);
 CREATE POLICY "service_role_all" ON knowledge_documents FOR ALL TO service_role USING (true) WITH CHECK (true);
 CREATE POLICY "service_role_all" ON ticker_map          FOR ALL TO service_role USING (true) WITH CHECK (true);
 

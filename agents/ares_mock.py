@@ -18,12 +18,18 @@ from core.agent_knowledge import AgentKnowledgeBase
 
 logger = logging.getLogger("ares.mock")
 
-_ACCOUNT_EQUITY = 100_000.0
-
-
 class AresMockAgent:
-    def __init__(self, slippage_bps: int = 5):
-        self.slippage_bps = slippage_bps
+    def __init__(
+        self,
+        slippage_bps: int = 5,
+        account_equity: float = 100_000.0,
+        stop_loss_pct: float = 0.03,
+        take_profit_pct: float = 0.06,
+    ):
+        self.slippage_bps   = slippage_bps
+        self.account_equity = account_equity
+        self.stop_loss_pct  = stop_loss_pct
+        self.take_profit_pct = take_profit_pct
         self._pending: list[str] = []
         self.kb = AgentKnowledgeBase("ares")   # shares Ares skills with live agent
         logger.info("[ARES-MOCK] Initialised — no IB connection required.")
@@ -42,11 +48,13 @@ class AresMockAgent:
 
         slippage    = mid * (self.slippage_bps / 10_000) * random.choice([-1, 1])
         fill_price  = round(mid + slippage, 4)
-        qty         = max(1, int(_ACCOUNT_EQUITY * sized.position_size_pct / fill_price))
+        qty         = max(1, int(self.account_equity * sized.position_size_pct / fill_price))
         is_long     = sized.category != SignalCategory.SUPPLIER_DISRUPTION
         side        = "BUY" if is_long else "SELL"
-        stop_price  = round(fill_price * (1 - 0.03 if is_long else 1 + 0.03), 4)
-        limit_price = round(fill_price * (1 + 0.06 if is_long else 1 - 0.06), 4)
+        sl  = self.stop_loss_pct
+        tp  = self.take_profit_pct
+        stop_price  = round(fill_price * (1 - sl if is_long else 1 + sl), 4)
+        limit_price = round(fill_price * (1 + tp if is_long else 1 - tp), 4)
         order_id    = str(uuid.uuid4())[:8]
 
         self._pending.append(order_id)

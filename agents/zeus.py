@@ -34,6 +34,7 @@ from core.circuit_breaker import CircuitBreaker
 from core.watchdog import Watchdog
 from core.redis_bridge import RedisBridge
 from core.milestone_manager import MilestoneManager
+from core.seniority import SeniorityEvaluator, SeniorityReport
 
 from agents.icarus import IcarusAgent
 from agents.hades import HadesAgent
@@ -56,6 +57,10 @@ class ZeusConfig:
     min_zeus_confidence:        float = 0.55
     use_llm_reasoning:          bool  = True
     starting_equity:            float = 100.0  # seed capital — MilestoneManager tracks from here
+    hermes_base_url:            str   = "https://hermes-agent-production-114e.up.railway.app"
+    default_account_equity:     float = 100_000.0
+    stop_loss_pct:              float = 0.03
+    take_profit_pct:            float = 0.06
 
 
 @dataclass
@@ -102,25 +107,51 @@ class ZeusOrchestrator:
         )
 
         # Agents — ZEUS holds the only references
-        self.icarus    = IcarusAgent()
+        self.icarus    = IcarusAgent(
+            base_url=self.config.hermes_base_url,
+            api_key=os.getenv("HERMES_API_KEY", ""),
+        )
         self.hades     = HadesAgent()
         self.artemis   = ArtemisAgent()
         self.pythia    = PythiaAgent(milestone_manager=self.milestone)
-        self.ares      = AresMockAgent() if self.config.mock_execution else AresAgent(paper=self.config.paper_trading)
+        self.ares      = (
+            AresMockAgent(
+                account_equity=self.config.default_account_equity,
+                stop_loss_pct=self.config.stop_loss_pct,
+                take_profit_pct=self.config.take_profit_pct,
+            )
+            if self.config.mock_execution
+            else AresAgent(
+                paper=self.config.paper_trading,
+                stop_loss_pct=self.config.stop_loss_pct,
+                take_profit_pct=self.config.take_profit_pct,
+            )
+        )
         self.argus     = ArgusAgent(
             max_drawdown_pct=self.config.max_portfolio_drawdown_pct,
             on_kill=self._emergency_halt,
             alert_fn=self._send_alert,
             milestone_manager=self.milestone,
+            default_account_equity=self.config.default_account_equity,
         )
         self.apollo    = ApolloAgent(knowledge_base=self.kb)
 
         # LLM client for reasoning step
-        self._claude = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY", ""))
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+        if not api_key:
+            raise RuntimeError("ANTHROPIC_API_KEY is not set — LLM reasoning will fail. Check your .env.")
+        self._claude = anthropic.Anthropic(api_key=api_key)
         self.bridge  = RedisBridge()   # SpendLens intelligence feed
+
+        # Seniority evaluator — evaluates all agents, gates position sizes
+        self.seniority = SeniorityEvaluator(kb=self.kb, alert_fn=self._send_alert)
+        self._seniority_report: Optional[SeniorityReport] = None
 
         self._register_watchdog()
         self.watchdog.start()
+
+        # Evaluate on startup — log current readiness
+        self._run_seniority_evaluation()
 
         logger.info(
             "[ZEUS] Initialised — paper=%s mock=%s llm_reasoning=%s",
@@ -151,16 +182,55 @@ class ZeusOrchestrator:
         self.cb.call("argus", fn=self.argus.refresh, fallback=None)
         return runs
 
-    def run_research_cycle(self) -> dict:
-        """Trigger Apollo's daily research cycle — ingest literature, update tickers, self-improve."""
-        return self.cb.call("apollo", fn=self.apollo.run_research_cycle, fallback={"error": "circuit open"})
+    def run_research_cycle(self, historical: bool = False) -> dict:
+        """Trigger Apollo's daily research cycle — ingest literature, update tickers, self-improve.
+
+        Pass historical=True for the one-shot bootstrap that loads 4 years of
+        earnings, Form 4, FRED macro, and EDGAR supply chain data before paper
+        trading begins.
+        """
+        if historical:
+            result = self.cb.call(
+                "apollo",
+                fn=self.apollo.run_historical_ingestion,
+                fallback={"error": "circuit open"},
+            )
+        else:
+            result = self.cb.call(
+                "apollo",
+                fn=self.apollo.run_research_cycle,
+                fallback={"error": "circuit open"},
+            )
+        # Re-evaluate seniority after every research cycle — Apollo may have promoted agents
+        self._run_seniority_evaluation()
+        return result
+
+    def get_seniority_report(self) -> dict:
+        """Return current seniority levels for all agents — safe to expose publicly."""
+        if self._seniority_report is None:
+            self._run_seniority_evaluation()
+        report = self._seniority_report
+        # Public view: levels only, no criteria details (knowledge base content stays private)
+        return {
+            "system_level":         report.system_level.label(),
+            "live_trading_allowed": report.system_level.live_trading_allowed(),
+            "max_position_pct":     report.system_level.max_position_pct(),
+            "evaluated_at":         report.evaluated_at.isoformat(),
+            "agents": {
+                name: {
+                    "level":     score.level.label(),
+                    "level_int": int(score.level),
+                }
+                for name, score in report.agents.items()
+            },
+        }
 
     def halt(self, reason: str = "manual") -> None:
         self.status = PipelineStatus.HALTED
         try:
             self.ares.cancel_all_pending()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("[ZEUS] cancel_all_pending failed during halt: %s", exc)
         self._send_alert(f"ZEUS HALTED — {reason}")
         logger.critical("[ZEUS] HALT — %s", reason)
 
@@ -273,6 +343,17 @@ class ZeusOrchestrator:
             self._write_trace(trace)
             return run.kill("zeus", trace.kill_reason)
 
+        # Stage 5b — Seniority position size ceiling
+        if self._seniority_report is not None:
+            max_pct = self._seniority_report.system_level.max_position_pct()
+            if sized.position_size_pct > max_pct:
+                logger.info(
+                    "[ZEUS] Position capped by seniority: %.2f%% → %.2f%% (system=%s)",
+                    sized.position_size_pct * 100, max_pct * 100,
+                    self._seniority_report.system_level.label(),
+                )
+                sized.position_size_pct = max_pct
+
         # Stage 6 — Execute
         result: TradeResult = self.cb.call(
             "ares",
@@ -317,81 +398,140 @@ class ZeusOrchestrator:
         if not self.config.use_llm_reasoning:
             return sized.confidence >= self.config.min_zeus_confidence, "LLM reasoning disabled.", None
 
-        # Build KB context
+        # Build KB context — Director needs breadth: doctrine, precedent, outcomes
         kb_query = (
             f"{sized.category.value} signal in {macro.regime} market, "
             f"VIX {macro.vix:.1f}, supplier {sized.supplier}"
         )
-        knowledge_chunks  = self.kb.query_knowledge(kb_query, n_results=4)
-        past_decisions    = self.kb.query_similar_decisions(kb_query, n_results=3)
-        outcome_stats     = self.kb.query_outcomes_by_context(sized.category.value, trace.trend_regime)
+        knowledge_chunks = self.kb.query_knowledge(kb_query, n_results=5)
+        past_decisions   = self.kb.query_similar_decisions(kb_query, n_results=4)
+        outcome_stats    = self.kb.query_outcomes_by_context(sized.category.value, trace.trend_regime)
+
+        # Portfolio concentration context — Director must see the whole book
+        open_positions   = self.argus.open_position_count()
+        portfolio_state  = self.argus.portfolio_state()
+        current_dd       = portfolio_state.current_drawdown_pct
+        equity           = portfolio_state.total_equity
 
         kb_context = "\n\n".join([
-            "--- TRADING KNOWLEDGE ---",
+            "--- TRADING DOCTRINE (KB) ---",
             *knowledge_chunks,
-            "--- SIMILAR PAST DECISIONS ---",
+            "--- PRECEDENT: SIMILAR PAST DECISIONS ---",
             *past_decisions,
-            f"--- HISTORICAL OUTCOMES FOR THIS CONTEXT ---\n{outcome_stats}",
-        ]) if knowledge_chunks or past_decisions else "No KB context available yet."
+            f"--- STATISTICAL OUTCOMES FOR THIS CONTEXT ---\n{outcome_stats}",
+        ]) if knowledge_chunks or past_decisions else "No KB context loaded yet — operating on first principles."
 
-        prompt = f"""You are ZEUS, the supreme trading orchestrator. You must make the final decision on whether to place this trade.
+        seniority_level = (
+            self._seniority_report.system_level.label()
+            if self._seniority_report else "Senior"
+        )
 
-SIGNAL
-Headline:  {sized.headline}
-Supplier:  {sized.supplier}
-Category:  {sized.category.value}
-Severity:  {sized.severity.value}
-Tickers:   {sized.affected_tickers}
+        prompt = f"""You are ZEUS — Director of Portfolio Management for Pantheon OS, an autonomous trading operation.
 
-PIPELINE ASSESSMENT
-Hades compliance score: {sized.original.compliance_score:.2f} | Notes: {'; '.join(sized.original.notes)}
-Market regime: {macro.regime} | VIX: {macro.vix:.1f} | SP500 1m return: {macro.sp500_1m_return*100:.1f}%
-Sector momentum: {macro.sector_momentum}
-Pattern confidence: {sized.confidence:.2f} | Proposed position size: {sized.position_size_pct*100:.2f}%
+Your role is not to rubber-stamp your analysts' recommendations. Your role is to govern the portfolio. You challenge assumptions, identify what your team missed, ensure every investment decision fits the portfolio strategy, and exercise final approval authority with full accountability for outcomes.
 
-KNOWLEDGE BASE CONTEXT
+Your team has already done their work:
+- Hades (Compliance) cleared this signal
+- Artemis (Macro Strategist) confirmed market conditions are acceptable
+- Pythia (Quant Analyst) sized the position based on historical pattern data
+
+Your job now is Director-level governance — not re-doing their analysis, but stress-testing it.
+
+═══════════════════════════════════════════════
+SIGNAL BRIEF (from Icarus)
+═══════════════════════════════════════════════
+Headline:   {sized.headline}
+Supplier:   {sized.supplier}
+Category:   {sized.category.value}
+Severity:   {sized.severity.value}
+Tickers:    {sized.affected_tickers}
+
+═══════════════════════════════════════════════
+TEAM ASSESSMENT SUMMARY
+═══════════════════════════════════════════════
+Compliance (Hades):    score {sized.original.compliance_score:.2f}/1.0 | {'; '.join(sized.original.notes) or 'clean'}
+Macro (Artemis):       regime={macro.regime.value} | VIX={macro.vix:.1f} | SPY 1m={macro.sp500_1m_return*100:.1f}%
+                       sector momentum: {macro.sector_momentum}
+Quant sizing (Pythia): pattern confidence={sized.confidence:.2f} | proposed size={sized.position_size_pct*100:.2f}%
+
+═══════════════════════════════════════════════
+PORTFOLIO STATE (from Argus)
+═══════════════════════════════════════════════
+Current equity:    €{equity:,.2f}
+Current drawdown:  {current_dd*100:.2f}%
+Open positions:    {open_positions}
+System seniority:  {seniority_level}
+
+═══════════════════════════════════════════════
+KNOWLEDGE BASE & PRECEDENT
+═══════════════════════════════════════════════
 {kb_context}
 
-YOUR TASK
-1. Evaluate whether this trade should be approved, rejected, or resized.
-2. Consider: does the KB knowledge support this signal type in this macro environment?
-3. Consider: what do similar past decisions tell us?
-4. Be conservative — a missed trade is better than a bad trade.
+═══════════════════════════════════════════════
+YOUR DIRECTOR-LEVEL GOVERNANCE QUESTIONS
+═══════════════════════════════════════════════
+Before approving, challenge the following:
 
-Respond in this exact JSON format:
+1. INVESTMENT THESIS: Is the signal-to-trade logic sound? Does this event type historically move this ticker in the expected direction, and within what timeframe?
+
+2. PORTFOLIO FIT: Does this trade fit the current portfolio? Consider concentration, sector exposure already open, and whether current drawdown warrants caution.
+
+3. ASSUMPTION STRESS TEST: What would have to be true for Pythia's confidence estimate to be wrong? Is the sample size sufficient? Is the regime classification reliable right now?
+
+4. ASYMMETRY CHECK: Is the risk/reward favorable? A 3% stop vs 6% target requires a >33% win rate to break even. Does Pythia's data support that?
+
+5. WHAT THE TEAM MISSED: Is there anything in the KB context, sector dynamics, or macro environment that your analysts did not explicitly weight?
+
+Based on this governance review, make your final portfolio decision.
+
+Respond in this exact JSON format — no markdown, no fences, raw JSON only:
 {{
   "approved": true or false,
   "confidence": 0.0 to 1.0,
-  "position_size_override": null or a decimal (e.g. 0.02 for 2%),
-  "reasoning": "2-3 sentence explanation of your decision"
+  "position_size_override": null or decimal (e.g. 0.025 for 2.5% — use when Pythia's size needs correction),
+  "governance_flags": ["list any concerns even if approving — empty array if none"],
+  "reasoning": "3-5 sentences: investment thesis assessment, portfolio fit verdict, key risk identified, final decision rationale"
 }}"""
 
         try:
+            import json, re
             response = self._claude.messages.create(
                 model="claude-haiku-4-5-20251001",
-                max_tokens=512,
+                max_tokens=800,   # Director reasoning needs room — 3-5 sentences + flags
                 messages=[{"role": "user", "content": prompt}],
             )
             raw = response.content[0].text.strip()
-            import json, re
-            # Extract JSON block even if Claude adds markdown fences
             match = re.search(r"\{.*\}", raw, re.DOTALL)
             if not match:
                 raise ValueError("No JSON found in Claude response")
             data = json.loads(match.group())
-            approved      = bool(data.get("approved", False))
-            reasoning     = data.get("reasoning", "")
-            override      = data.get("position_size_override")
-            override_size = float(override) if override is not None else None
 
-            # Hard floor: never trade below min confidence
-            if data.get("confidence", 1.0) < self.config.min_zeus_confidence:
-                approved  = False
-                reasoning += f" (ZEUS confidence {data.get('confidence'):.2f} below floor {self.config.min_zeus_confidence:.2f})"
+            approved          = bool(data.get("approved", False))
+            reasoning         = data.get("reasoning", "")
+            governance_flags  = data.get("governance_flags", [])
+            override          = data.get("position_size_override")
+            override_size     = float(override) if override is not None else None
+
+            # Append governance flags to reasoning so they appear in the trace
+            if governance_flags:
+                flags_text = " | FLAGS: " + "; ".join(governance_flags)
+                reasoning  = reasoning + flags_text
+
+            # Hard floor: confidence below threshold → reject regardless
+            llm_confidence = data.get("confidence", 1.0)
+            if llm_confidence < self.config.min_zeus_confidence:
+                approved   = False
+                reasoning += f" [REJECTED: Director confidence {llm_confidence:.2f} below floor {self.config.min_zeus_confidence:.2f}]"
+
+            # Sanity check: short reasoning means model didn't think carefully
+            if len(reasoning) < 80:
+                logger.warning("[ZEUS] Director reasoning suspiciously short (%d chars) — treating as low confidence", len(reasoning))
+                approved = False
+                reasoning += " [REJECTED: insufficient reasoning quality]"
 
             logger.info(
-                "[ZEUS] LLM decision — approved=%s confidence=%.2f override_size=%s",
-                approved, data.get("confidence", 0), override_size,
+                "[ZEUS] Director decision — approved=%s confidence=%.2f override_size=%s flags=%s",
+                approved, llm_confidence, override_size, governance_flags,
             )
             return approved, reasoning, override_size
 
@@ -422,6 +562,13 @@ Respond in this exact JSON format:
         except Exception as exc:
             logger.warning("[ZEUS] Failed to write trace to KB: %s", exc)
         self.bridge.push_decision(trace)           # → SpendLens Icarus AI feed
+
+    def _run_seniority_evaluation(self) -> None:
+        try:
+            self._seniority_report = self.seniority.evaluate()
+            logger.info("[ZEUS] Seniority: %s", self._seniority_report.summary_line())
+        except Exception as exc:
+            logger.warning("[ZEUS] Seniority evaluation failed: %s", exc)
 
     def _emergency_halt(self, reason: str) -> None:
         self.halt(reason=f"drawdown kill — {reason}")

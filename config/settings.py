@@ -12,16 +12,34 @@ from typing import Any
 _SETTINGS_FILE = Path(__file__).parent / "settings.json"
 
 _DEFAULTS: dict[str, Any] = {
+    # Pipeline
     "paper_trading": True,
     "mock_execution": True,
     "max_drawdown_pct": 0.08,
     "max_open_positions": 10,
     "poll_interval_seconds": 900,
     "webhook_port": 8080,
+    "hermes_base_url": "https://hermes-agent-production-114e.up.railway.app",
     "hermes_feeds": [],
+    # IBKR
     "ib_host": "127.0.0.1",
     "ib_paper_port": 7497,
     "ib_live_port": 7496,
+    "default_account_equity": 100_000.0,   # fallback when IB unavailable
+    # Risk parameters — Ares bracket order
+    "stop_loss_pct": 0.03,        # 3% stop
+    "take_profit_pct": 0.06,      # 6% target (2:1 R/R)
+    # Confidence thresholds
+    "zeus_min_confidence": 0.55,
+    "pythia_default_confidence": 0.55,
+    "pythia_min_confidence": 0.45,
+    "pythia_tier1_confidence": 0.70,
+    # Macro thresholds — Artemis
+    "vix_medium": 15.0,
+    "vix_high": 25.0,
+    "vix_extreme": 35.0,
+    "bull_threshold": 0.02,       # SPY 1m return above this = bull
+    "bear_threshold": -0.03,      # SPY 1m return below this = bear
 }
 
 

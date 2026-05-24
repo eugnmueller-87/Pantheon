@@ -17,7 +17,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -40,15 +39,12 @@ def build_zeus() -> ZeusOrchestrator:
         paper_trading              = settings.get("paper_trading", True),
         mock_execution             = settings.get("mock_execution", True),
         use_llm_reasoning          = settings.get("use_llm_reasoning", True),
+        hermes_base_url            = settings.get("hermes_base_url"),
+        default_account_equity     = settings.get("default_account_equity", 100_000.0),
+        stop_loss_pct              = settings.get("stop_loss_pct", 0.03),
+        take_profit_pct            = settings.get("take_profit_pct", 0.06),
     )
-    zeus = ZeusOrchestrator(config)
-
-    # Point Icarus at the live Hermes instance
-    zeus.icarus._base_url = settings.get("hermes_base_url", "https://hermes-agent-production-114e.up.railway.app")
-    if not zeus.icarus._api_key:
-        zeus.icarus._api_key = os.getenv("HERMES_API_KEY", "")
-
-    return zeus
+    return ZeusOrchestrator(config)
 
 
 # ---------------------------------------------------------------------------
@@ -75,8 +71,9 @@ class ZeusHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path == "/run":
             self._handle_run()
-        elif self.path == "/run/research":
-            self._handle_research()
+        elif self.path in ("/run/research", "/run/research/historical"):
+            historical = self.path.endswith("/historical")
+            self._handle_research(historical=historical)
         elif self.path == "/halt":
             self._handle_halt()
         elif self.path == "/resume":
@@ -107,10 +104,10 @@ class ZeusHandler(BaseHTTPRequestHandler):
             logger.exception("[MAIN] /run failed")
             self._json_response(500, {"error": str(exc)})
 
-    def _handle_research(self):
+    def _handle_research(self, historical: bool = False):
         try:
-            summary = _zeus.run_research_cycle()
-            self._json_response(200, {"status": "ok", "research": summary})
+            summary = _zeus.run_research_cycle(historical=historical)
+            self._json_response(200, {"status": "ok", "historical": historical, "research": summary})
         except Exception as exc:
             logger.exception("[MAIN] /run/research failed")
             self._json_response(500, {"error": str(exc)})
@@ -124,7 +121,7 @@ class ZeusHandler(BaseHTTPRequestHandler):
         self._json_response(200, {"status": "running"})
 
     def _handle_status(self):
-        state = _zeus.argus._state
+        state = _zeus.argus.portfolio_state()
         cb_status = _zeus.cb.status()
         self._json_response(200, {
             "pipeline_status":  _zeus.status.value,
@@ -134,6 +131,7 @@ class ZeusHandler(BaseHTTPRequestHandler):
             "paper_trading":    _zeus.config.paper_trading,
             "mock_execution":   _zeus.config.mock_execution,
             "circuit_breakers": cb_status,
+            "seniority":        _zeus.get_seniority_report(),
         })
 
     def _handle_agents(self):

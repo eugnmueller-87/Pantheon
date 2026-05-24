@@ -18,7 +18,7 @@ import logging
 import threading
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Callable, Optional
 
 from core.types import AgentHealth, HealthReport
@@ -117,7 +117,7 @@ class Watchdog:
         report = HealthReport(
             agent_name=reg.name,
             status=status,
-            checked_at=datetime.utcnow(),
+            checked_at=datetime.now(timezone.utc),
         )
 
         self._persist_health(reg.name, status)

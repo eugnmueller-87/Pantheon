@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 import threading
 from collections import defaultdict, deque
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional, TypeVar
 
 from core.types import AgentHealth
@@ -109,7 +109,7 @@ class CircuitBreaker:
         with self._lock:
             if self._state[agent] == "OPEN":
                 opened = self._opened_at[agent]
-                if opened and datetime.utcnow() - opened >= self._reset_to:
+                if opened and datetime.now(timezone.utc) - opened >= self._reset_to:
                     self._state[agent] = "HALF_OPEN"
                     logger.info("[CB] Circuit HALF_OPEN for %s — testing recovery.", agent)
             return self._state[agent]
@@ -123,7 +123,7 @@ class CircuitBreaker:
             self._opened_at[agent] = None
 
     def _on_failure(self, agent: str) -> None:
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         with self._lock:
             self._failures[agent].append(now)
             self._prune_locked(agent, now)
@@ -133,7 +133,7 @@ class CircuitBreaker:
 
     def _prune(self, agent: str) -> None:
         with self._lock:
-            self._prune_locked(agent, datetime.utcnow())
+            self._prune_locked(agent, datetime.now(timezone.utc))
 
     def _prune_locked(self, agent: str, now: datetime) -> None:
         cutoff = now - self._window

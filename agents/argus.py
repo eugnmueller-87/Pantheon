@@ -21,8 +21,8 @@ from core.agent_knowledge import AgentKnowledgeBase
 logger = logging.getLogger("argus")
 
 _USE_SUPABASE = bool(
-    __import__("os").getenv("SUPABASE_URL") and
-    __import__("os").getenv("SUPABASE_SERVICE_ROLE_KEY")
+    os.getenv("SUPABASE_URL") and
+    os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 )
 
 
@@ -49,12 +49,13 @@ class PortfolioState:
 class ArgusAgent:
     def __init__(
         self,
-        max_drawdown_pct:   float                          = 0.08,
-        on_kill:            Optional[Callable[[str], None]] = None,
-        alert_fn:           Optional[Callable[[str], None]] = None,
-        telegram_token:     Optional[str]                  = None,
-        telegram_chat_id:   Optional[str]                  = None,
+        max_drawdown_pct:       float                          = 0.08,
+        on_kill:                Optional[Callable[[str], None]] = None,
+        alert_fn:               Optional[Callable[[str], None]] = None,
+        telegram_token:         Optional[str]                  = None,
+        telegram_chat_id:       Optional[str]                  = None,
         milestone_manager = None,   # MilestoneManager injected by ZEUS
+        default_account_equity: float                          = 100_000.0,
     ):
         self.max_drawdown_pct  = max_drawdown_pct
         self._on_kill          = on_kill
@@ -64,6 +65,7 @@ class ArgusAgent:
         self._state            = PortfolioState()
         self._ib               = None
         self._milestone        = milestone_manager
+        self._default_equity   = default_account_equity
         self.kb = AgentKnowledgeBase("argus")
 
     def health(self) -> AgentHealth:
@@ -100,6 +102,9 @@ class ArgusAgent:
     def open_position_count(self) -> int:
         return len(self._state.snapshots)
 
+    def portfolio_state(self) -> PortfolioState:
+        return self._state
+
     def send_alert(self, message: str) -> None:
         # External alert_fn first (used by Watchdog)
         if self._alert_fn:
@@ -121,7 +126,7 @@ class ArgusAgent:
             logger.info("[ARGUS] Alert (no Telegram): %s", message)
 
     def _build_state(self, ib) -> PortfolioState:
-        equity = 100_000.0
+        equity = self._default_equity
         for av in ib.accountValues():
             if av.tag == "NetLiquidation" and av.currency == "BASE":
                 equity = float(av.value)
@@ -132,14 +137,17 @@ class ArgusAgent:
             if pos.position == 0:
                 continue
             cost = pos.averageCost or 1.0
+            qty = abs(pos.position)
+            denom = qty * cost
+            unrealized_pnl_pct = pos.unrealizedPNL / denom if denom != 0 else 0.0
             snapshots.append(PositionSnapshot(
                 symbol             = pos.contract.symbol,
                 side               = "LONG" if pos.position > 0 else "SHORT",
-                qty                = abs(pos.position),
+                qty                = qty,
                 avg_cost           = cost,
                 current_price      = pos.marketPrice,
                 unrealized_pnl     = pos.unrealizedPNL,
-                unrealized_pnl_pct = pos.unrealizedPNL / (abs(pos.position) * cost),
+                unrealized_pnl_pct = unrealized_pnl_pct,
             ))
 
         peak = max(self._state.peak_equity, equity)

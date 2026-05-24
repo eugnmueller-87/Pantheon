@@ -188,8 +188,7 @@ class TestPositionSizeSanity:
             _, result = run(h, t, p, e, _raw("Big tech news"))
         if result:
             # qty × price / account_equity ≤ 5%
-            from agents.ares_mock import _ACCOUNT_EQUITY
-            exposure = (result.qty * result.fill_price) / _ACCOUNT_EQUITY
+            exposure = (result.qty * result.fill_price) / 100_000.0
             assert exposure <= 0.051  # tiny tolerance for rounding
 
     def test_cold_start_uses_2pct_default(self, pipeline):
@@ -197,8 +196,7 @@ class TestPositionSizeSanity:
         with _mock_price(100.0):
             _, result = run(h, t, p, e, _raw("Tech news"))
         if result:
-            from agents.ares_mock import _ACCOUNT_EQUITY
-            exposure = (result.qty * result.fill_price) / _ACCOUNT_EQUITY
+            exposure = (result.qty * result.fill_price) / 100_000.0
             assert exposure == pytest.approx(0.02, abs=0.005)
 
 

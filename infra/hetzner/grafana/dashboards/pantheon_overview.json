@@ -156,6 +156,131 @@
         "rawSql": "SELECT month AS \"Month\", ROUND(win_rate * 100, 1) AS \"Win Rate %\", ROUND(avg_pnl_pct * 100, 2) AS \"Avg P&L %\" FROM get_monthly_returns() ORDER BY month ASC",
         "format": "table"
       }]
+    },
+
+    {
+      "id": 9,
+      "title": "Agent Seniority Levels",
+      "type": "table",
+      "gridPos": { "x": 0, "y": 24, "w": 14, "h": 8 },
+      "datasource": { "uid": "supabase-postgres" },
+      "targets": [{
+        "rawSql": "SELECT agent_name AS \"Agent\", seniority_level AS \"Level\", level_int AS \"Score\", live_trading_ok AS \"Live OK\", evaluated_at AS \"Evaluated\" FROM agent_seniority ORDER BY level_int DESC, agent_name ASC",
+        "format": "table"
+      }],
+      "fieldConfig": {
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Level" },
+            "properties": [{
+              "id": "custom.displayMode",
+              "value": "color-background"
+            }, {
+              "id": "mappings",
+              "value": [
+                { "type": "value", "options": { "Director":   { "color": "purple", "index": 0 } } },
+                { "type": "value", "options": { "Principal":  { "color": "blue",   "index": 1 } } },
+                { "type": "value", "options": { "Senior":     { "color": "green",  "index": 2 } } },
+                { "type": "value", "options": { "Junior":     { "color": "yellow", "index": 3 } } },
+                { "type": "value", "options": { "Trainee":    { "color": "red",    "index": 4 } } }
+              ]
+            }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Live OK" },
+            "properties": [{
+              "id": "custom.displayMode",
+              "value": "color-background"
+            }, {
+              "id": "mappings",
+              "value": [
+                { "type": "value", "options": { "true":  { "color": "green", "index": 0 } } },
+                { "type": "value", "options": { "false": { "color": "red",   "index": 1 } } }
+              ]
+            }]
+          }
+        ]
+      }
+    },
+
+    {
+      "id": 10,
+      "title": "System Seniority",
+      "type": "stat",
+      "gridPos": { "x": 14, "y": 24, "w": 5, "h": 4 },
+      "datasource": { "uid": "supabase-postgres" },
+      "targets": [{
+        "rawSql": "SELECT system_level AS value FROM system_seniority ORDER BY evaluated_at DESC LIMIT 1",
+        "format": "table"
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "steps": [
+              { "color": "red",    "value": null },
+              { "color": "yellow", "value": 0 },
+              { "color": "green",  "value": 1 },
+              { "color": "blue",   "value": 2 },
+              { "color": "purple", "value": 3 }
+            ]
+          },
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "TRAINEE"   } } },
+            { "type": "value", "options": { "1": { "text": "JUNIOR"    } } },
+            { "type": "value", "options": { "2": { "text": "SENIOR"    } } },
+            { "type": "value", "options": { "3": { "text": "PRINCIPAL" } } },
+            { "type": "value", "options": { "4": { "text": "DIRECTOR"  } } }
+          ]
+        }
+      }
+    },
+
+    {
+      "id": 11,
+      "title": "Live Trading Allowed",
+      "type": "stat",
+      "gridPos": { "x": 19, "y": 24, "w": 5, "h": 4 },
+      "datasource": { "uid": "supabase-postgres" },
+      "targets": [{
+        "rawSql": "SELECT CASE WHEN live_trading_ok THEN 'YES' ELSE 'NO' END AS value FROM system_seniority ORDER BY evaluated_at DESC LIMIT 1",
+        "format": "table"
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "steps": [{ "color": "red", "value": null }] },
+          "mappings": [
+            { "type": "value", "options": { "YES": { "color": "green", "text": "LIVE ENABLED"  } } },
+            { "type": "value", "options": { "NO":  { "color": "red",   "text": "PAPER ONLY"    } } }
+          ]
+        }
+      }
+    },
+
+    {
+      "id": 12,
+      "title": "Max Position Size",
+      "type": "gauge",
+      "gridPos": { "x": 14, "y": 28, "w": 10, "h": 4 },
+      "datasource": { "uid": "supabase-postgres" },
+      "targets": [{
+        "rawSql": "SELECT max_position_pct * 100 AS value FROM system_seniority ORDER BY evaluated_at DESC LIMIT 1",
+        "format": "table"
+      }],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0, "max": 5,
+          "thresholds": {
+            "steps": [
+              { "color": "red",    "value": 0 },
+              { "color": "yellow", "value": 2 },
+              { "color": "green",  "value": 3 }
+            ]
+          }
+        }
+      }
     }
 
   ]

@@ -111,6 +111,18 @@ class ApolloAgent:
                 return AgentHealth.DEGRADED
         return AgentHealth.HEALTHY
 
+    def run_historical_ingestion(self) -> dict:
+        """
+        One-shot bootstrap: load 4 years of earnings, Form 4, FRED macro, and
+        EDGAR supply chain data into the KB before paper trading begins.
+        Safe to call multiple times — idempotent.
+        """
+        from agents.apollo_historical import HistoricalIngestionPipeline
+        pipeline = HistoricalIngestionPipeline(knowledge_base=self._zeus_kb)
+        summary = pipeline.run()
+        logger.info("[APOLLO] Historical ingestion complete: %s", summary)
+        return summary
+
     def run_research_cycle(self) -> dict:
         """
         Full daily research cycle. Returns a summary dict for logging.
@@ -457,12 +469,9 @@ class ApolloAgent:
         if self._zeus_kb is None:
             return 0
 
-        # Query all recent decisions from ChromaDB decisions collection
+        # Query all recent decisions via the public KB interface
         try:
-            results = self._zeus_kb._decisions_col.get(
-                include=["metadatas", "documents"],
-                limit=_SELF_IMPROVE_EVERY_N,
-            ) if self._zeus_kb._decisions_col is not None else None
+            results = self._zeus_kb.get_recent_decisions(limit=_SELF_IMPROVE_EVERY_N)
         except Exception:
             return 0
 
@@ -496,7 +505,7 @@ class ApolloAgent:
             pnl    = m.get("pnl_pct", 0.0) or 0.0
             cat    = m.get("category", "unknown")
             regime = m.get("regime", "unknown")
-            if str(m.get("approved", "False")) == "True":
+            if m.get("approved") is True or m.get("approved") == "True":
                 approved_count += 1
                 by_category[cat].append(pnl)
                 by_regime[regime].append(pnl)

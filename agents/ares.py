@@ -21,12 +21,22 @@ class AresAgent:
     IB_PAPER_PORT = 7497
     IB_LIVE_PORT  = 7496
 
-    def __init__(self, paper: bool = True, host: str = "127.0.0.1"):
-        self.paper = paper
-        self.host  = host
-        self.port  = self.IB_PAPER_PORT if paper else self.IB_LIVE_PORT
-        self._ib   = None
-        self._pending: list[str] = []
+    def __init__(
+        self,
+        paper: bool = True,
+        host: str = "127.0.0.1",
+        stop_loss_pct: float = 0.03,
+        take_profit_pct: float = 0.06,
+        default_account_equity: float = 100_000.0,
+    ):
+        self.paper                  = paper
+        self.host                   = host
+        self.port                   = self.IB_PAPER_PORT if paper else self.IB_LIVE_PORT
+        self.stop_loss_pct          = stop_loss_pct
+        self.take_profit_pct        = take_profit_pct
+        self.default_account_equity = default_account_equity
+        self._ib                    = None
+        self._pending: list[str]    = []
         self.kb = AgentKnowledgeBase("ares")
         logger.info("[ARES] %s mode — port %d", "PAPER" if paper else "LIVE", self.port)
 
@@ -66,17 +76,23 @@ class AresAgent:
 
         ticker = ib.reqMktData(contract, "", False, False)
         ib.sleep(1)
-        mid = ticker.midpoint() or ticker.last or ticker.close
+        mid = ticker.midpoint()
+        if mid is None or mid == 0:
+            mid = ticker.last
+        if mid is None or mid == 0:
+            mid = ticker.close
         ib.cancelMktData(contract)
-        if not mid or mid <= 0:
+        if mid is None or mid <= 0:
             raise ValueError(f"Could not price {symbol}")
 
         account_val = self._get_account_value(ib)
         qty         = max(1, int(account_val * sized.position_size_pct / mid))
         is_long     = sized.category != SignalCategory.SUPPLIER_DISRUPTION
         side        = "BUY" if is_long else "SELL"
-        stop_price  = round(mid * (1 - 0.03 if is_long else 1 + 0.03), 2)
-        limit_price = round(mid * (1 + 0.06 if is_long else 1 - 0.06), 2)
+        sl  = self.stop_loss_pct
+        tp  = self.take_profit_pct
+        stop_price  = round(mid * (1 - sl if is_long else 1 + sl), 2)
+        limit_price = round(mid * (1 + tp if is_long else 1 - tp), 2)
 
         bracket = ib.bracketOrder(side, qty, mid, limit_price, stop_price)
         for o in bracket:
@@ -95,7 +111,7 @@ class AresAgent:
         for av in ib.accountValues():
             if av.tag == "NetLiquidation" and av.currency == "BASE":
                 return float(av.value)
-        return 100_000.0
+        return self.default_account_equity
 
     def _get_connection(self):
         if self._ib is None or not self._ib.isConnected():

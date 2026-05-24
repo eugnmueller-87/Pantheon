@@ -265,11 +265,8 @@ def upsert_ticker(supplier_name: str, ticker: str, exchange: str, source: str = 
 def get_trades_for_report(days: int = 30) -> list[dict]:
     """Pull closed trades for the last N days — used by QuantStats daily report."""
     try:
-        from_dt = datetime.now(timezone.utc).replace(
-            hour=0, minute=0, second=0, microsecond=0
-        )
-        import datetime as dt
-        from_dt = (datetime.now(timezone.utc) - dt.timedelta(days=days)).isoformat()
+        from datetime import timedelta
+        from_dt = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
 
         res = (
             get_client()

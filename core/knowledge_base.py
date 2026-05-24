@@ -181,15 +181,23 @@ class KnowledgeBase:
             except Exception as exc:
                 logger.warning("[KB] outcome update failed: %s", exc)
 
-    def add_literature(self, title: str, text: str, source: str = "crawled") -> None:
-        """Add crawled financial literature to the knowledge collection."""
+    def add_literature(self, title: str, text: str, source: str = "crawled",
+                       doc_id: Optional[str] = None) -> None:
+        """Add crawled financial literature to the knowledge collection.
+
+        Pass doc_id for idempotent ingestion — existing entries are skipped.
+        """
         if self._knowledge_col is None:
             return
         chunks = self._chunk(text, chunk_size=800, overlap=100)
-        base_id = f"lit:{uuid.uuid4().hex[:8]}"
+        base_id = doc_id if doc_id else f"lit:{uuid.uuid4().hex[:8]}"
         for i, chunk in enumerate(chunks):
+            chunk_id = f"{base_id}:chunk{i}"
+            # Skip if already ingested (idempotent when doc_id is provided)
+            if doc_id and self._knowledge_col.get(ids=[chunk_id])["ids"]:
+                continue
             self._knowledge_col.add(
-                ids=[f"{base_id}:chunk{i}"],
+                ids=[chunk_id],
                 documents=[chunk],
                 metadatas=[{"source": source, "title": title, "type": "literature", "chunk": i}],
             )
@@ -267,6 +275,19 @@ class KnowledgeBase:
         except Exception as exc:
             logger.warning("[KB] query_outcomes failed: %s", exc)
             return {}
+
+    def get_recent_decisions(self, limit: int = 50) -> dict:
+        """Return recent decision trace metadata for Apollo's self-improvement loop."""
+        if self._decisions_col is None:
+            return {"metadatas": [], "documents": []}
+        try:
+            return self._decisions_col.get(
+                include=["metadatas", "documents"],
+                limit=limit,
+            )
+        except Exception as exc:
+            logger.warning("[KB] get_recent_decisions failed: %s", exc)
+            return {"metadatas": [], "documents": []}
 
     # ------------------------------------------------------------------
     # Internal helpers

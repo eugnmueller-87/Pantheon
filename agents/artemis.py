@@ -92,9 +92,11 @@ class ArtemisAgent:
             try:
                 hist = yf.Ticker(ticker).history(period="1mo")
                 if len(hist) >= 2:
-                    result[name] = round(
-                        (float(hist["Close"].iloc[-1]) - float(hist["Close"].iloc[0])) / float(hist["Close"].iloc[0]), 4
-                    )
+                    base = float(hist["Close"].iloc[0])
+                    if base != 0:
+                        result[name] = round(
+                            (float(hist["Close"].iloc[-1]) - base) / base, 4
+                        )
             except Exception:
                 result[name] = 0.0
         return result
