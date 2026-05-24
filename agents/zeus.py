@@ -170,12 +170,17 @@ class ZeusOrchestrator:
             logger.warning("[ZEUS] Pipeline is %s — skipping run.", self.status.value)
             return []
 
-        raw_signals = self.cb.call(
-            "icarus",
-            fn=self.icarus.fetch,
-            fallback=[],
-        )
-        logger.info("[ZEUS] Icarus returned %d signal(s).", len(raw_signals))
+        # Fetch signals: prefer Kafka bus, fall back to direct Icarus call
+        from core.kafka_bus import is_available as kafka_up, consume_raw_signals
+        if kafka_up():
+            raw_signals = consume_raw_signals()
+            logger.info("[ZEUS] Kafka: consumed %d signal(s).", len(raw_signals))
+            if not raw_signals:
+                # Kafka available but empty — also fetch live so we never miss a cycle
+                raw_signals = self.cb.call("icarus", fn=self.icarus.fetch, fallback=[])
+        else:
+            raw_signals = self.cb.call("icarus", fn=self.icarus.fetch, fallback=[])
+            logger.info("[ZEUS] Icarus (direct) returned %d signal(s).", len(raw_signals))
 
         runs: list[PipelineRun] = []
         for sig in raw_signals:
@@ -646,6 +651,8 @@ Respond in this exact JSON format — no markdown, no fences, raw JSON only:
         except Exception as exc:
             logger.warning("[ZEUS] Failed to write trace to KB: %s", exc)
         self.bridge.push_decision(trace)           # → SpendLens Icarus AI feed
+        from core.kafka_bus import publish_decision_trace
+        publish_decision_trace(trace)              # → Kafka zeus.decision_traces (no-op if down)
 
     def _run_seniority_evaluation(self) -> None:
         try:

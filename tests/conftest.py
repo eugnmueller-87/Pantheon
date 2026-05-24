@@ -21,6 +21,8 @@ os.environ.setdefault("UPSTASH_REDIS_REST_TOKEN",  "mock-token")
 # Explicitly unset Supabase so PythiaAgent always uses SQLite in tests
 os.environ.pop("SUPABASE_URL", None)
 os.environ.pop("SUPABASE_SERVICE_ROLE_KEY", None)
+# Disable Kafka so no broker connection is attempted during tests
+os.environ.setdefault("KAFKA_ENABLED", "false")
 
 
 def _make_ticker(close_values):

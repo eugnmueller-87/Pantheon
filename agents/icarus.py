@@ -113,6 +113,11 @@ class IcarusAgent:
         except Exception as exc:
             logger.error("[ICARUS] Hermes /briefing failed: %s", exc)
         logger.info("[ICARUS] %d new signal(s) from Hermes.", len(signals))
+        # Publish to Kafka event bus (no-op if Kafka unavailable)
+        if signals:
+            from core.kafka_bus import publish_raw_signal
+            for sig in signals:
+                publish_raw_signal(sig)
         return signals
 
     def fetch_company(self, company: str) -> list[RawSignal]:

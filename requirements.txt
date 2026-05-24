@@ -39,3 +39,6 @@ quantstats>=0.0.62
 # Quality gate — testing
 pytest>=8.0
 pytest-mock>=3.12
+
+# Kafka event bus (offline-safe — falls back silently if broker unreachable)
+kafka-python>=2.0
