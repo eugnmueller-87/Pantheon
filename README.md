@@ -1,7 +1,7 @@
 # Pantheon OS — Autonomous Trading Orchestrator
 
 ![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=flat&logo=python&logoColor=white)
-![Tests](https://img.shields.io/badge/Tests-234%20passing-brightgreen?style=flat)
+![Tests](https://img.shields.io/badge/Tests-294%20passing-brightgreen?style=flat)
 ![CI](https://img.shields.io/badge/CI%2FCD-GitHub%20Actions-2088FF?style=flat&logo=githubactions&logoColor=white)
 ![Status](https://img.shields.io/badge/Status-Paper%20Trading-orange?style=flat)
 ![Broker](https://img.shields.io/badge/Broker-Interactive%20Brokers-red?style=flat)
