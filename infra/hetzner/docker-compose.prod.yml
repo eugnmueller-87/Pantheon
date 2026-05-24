@@ -1,5 +1,3 @@
-version: "3.9"
-
 # Pantheon OS — Production Docker Compose (Hetzner CX21)
 # Frankfurt DC, 2 vCPU, 4 GB RAM
 #
