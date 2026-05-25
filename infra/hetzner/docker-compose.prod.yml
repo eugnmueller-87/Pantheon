@@ -16,17 +16,17 @@ services:
   # ghcr.io/unusualbusiness/ibgateway auto-logs in via env vars.
   # Paper port 4002 is internal only — Ares connects via service name.
   ibgateway:
-    image: ghcr.io/unusualbusiness/ibgateway:latest
+    image: gnzsnz/ib-gateway:latest
     container_name: pantheon_ibgateway
     restart: always
     environment:
-      - IBGATEWAY_USER=${IB_USERNAME}
-      - IBGATEWAY_PASSWORD=${IB_PASSWORD}
-      - TRADING_MODE=paper          # paper | live
-      - JAVA_HEAP_SIZE=512m
+      - TWS_USERID=${IB_USERNAME}
+      - TWS_PASSWORD=${IB_PASSWORD}
+      - TRADING_MODE=paper
+      - TWS_SETTINGS_PATH=/root/ibgateway
       - TZ=Europe/Berlin
     ports:
-      - "4002:4002"                 # expose for local debugging only — firewall in prod
+      - "4002:4002"
     volumes:
       - ibgateway_config:/root/ibgateway
     healthcheck:
@@ -34,7 +34,7 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 60s             # IB Gateway takes ~45s to start
+      start_period: 60s
     networks:
       - pantheon
 
