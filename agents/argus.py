@@ -65,7 +65,8 @@ class ArgusAgent:
         self._alert_fn         = alert_fn
         self._telegram_token   = telegram_token   or os.getenv("TELEGRAM_BOT_TOKEN")
         self._telegram_chat_id = telegram_chat_id or os.getenv("TELEGRAM_CHAT_ID")
-        self._state            = PortfolioState()
+        self._state            = PortfolioState(total_equity=default_account_equity,
+                                               peak_equity=default_account_equity)
         self._ib               = None
         self._ib_host          = ib_host
         self._ib_port          = ib_port
