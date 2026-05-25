@@ -629,10 +629,24 @@ Respond in this exact JSON format — no markdown, no fences, raw JSON only:
         sized: SizedSignal,
     ) -> tuple[bool, str, Optional[float]]:
         """Parse Claude's JSON response into (approved, reasoning, override_size)."""
-        match = re.search(r"\{.*\}", raw, re.DOTALL)
-        if not match:
+        # Find the outermost balanced JSON object
+        data = None
+        start = raw.find("{")
+        if start != -1:
+            depth = 0
+            for i, ch in enumerate(raw[start:], start):
+                if ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        try:
+                            data = json.loads(raw[start:i + 1])
+                        except json.JSONDecodeError:
+                            pass
+                        break
+        if data is None:
             raise ValueError("No JSON found in Claude response")
-        data = json.loads(match.group())
 
         approved         = bool(data.get("approved", False))
         reasoning        = data.get("reasoning", "")
