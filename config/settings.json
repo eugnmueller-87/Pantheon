@@ -10,5 +10,7 @@
   "ib_live_port": 4001,
   "hermes_base_url": "https://hermes-agent-production-114e.up.railway.app",
   "telegram_bot_token": "",
-  "telegram_chat_id": ""
+  "telegram_chat_id": "",
+  "default_account_equity": 100000.0,
+  "starting_equity": 100000.0
 }

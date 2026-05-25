@@ -44,6 +44,7 @@ def build_zeus() -> ZeusOrchestrator:
         use_llm_reasoning          = settings.get("use_llm_reasoning", True),
         hermes_base_url            = settings.get("hermes_base_url"),
         default_account_equity     = settings.get("default_account_equity", 100_000.0),
+        starting_equity            = settings.get("starting_equity", 100_000.0),
         stop_loss_pct              = settings.get("stop_loss_pct", 0.03),
         take_profit_pct            = settings.get("take_profit_pct", 0.06),
     )
