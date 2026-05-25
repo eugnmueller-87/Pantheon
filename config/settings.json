@@ -1,13 +1,13 @@
 {
   "paper_trading": true,
-  "mock_execution": true,
+  "mock_execution": false,
   "max_drawdown_pct": 0.08,
   "max_open_positions": 10,
   "poll_interval_seconds": 900,
   "webhook_port": 8080,
-  "ib_host": "127.0.0.1",
-  "ib_paper_port": 7497,
-  "ib_live_port": 7496,
+  "ib_host": "pantheon_ibgateway",
+  "ib_paper_port": 4002,
+  "ib_live_port": 4001,
   "hermes_base_url": "https://hermes-agent-production-114e.up.railway.app",
   "telegram_bot_token": "",
   "telegram_chat_id": ""
