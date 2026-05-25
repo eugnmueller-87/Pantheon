@@ -482,14 +482,34 @@ class ZeusOrchestrator:
         trace: DecisionTrace,
     ) -> tuple[bool, str, Optional[float]]:
         """
-        Query the KB for relevant knowledge + similar past decisions,
-        then ask Claude to make the final trade approval call.
+        Query the KB, build the Director prompt, call Claude, parse response.
         Returns (approved, reasoning_text, override_position_size_or_None).
         """
         if not self.config.use_llm_reasoning:
             return sized.confidence >= self.config.min_zeus_confidence, "LLM reasoning disabled.", None
 
-        # Build KB context — Director needs breadth: doctrine, precedent, outcomes
+        kb_context   = self._build_kb_context(sized, macro, trace)
+        prompt       = self._build_director_prompt(sized, macro, kb_context)
+
+        try:
+            response = self._claude.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=800,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            return self._parse_llm_response(response.content[0].text.strip(), sized)
+        except Exception as exc:
+            logger.error("[ZEUS] LLM reasoning failed: %s — defaulting to Pattern score.", exc)
+            fallback_approved = sized.confidence >= self.config.min_zeus_confidence
+            return fallback_approved, f"LLM call failed ({exc}). Used Pattern confidence fallback.", None
+
+    def _build_kb_context(
+        self,
+        sized: SizedSignal,
+        macro: MacroContext,
+        trace: DecisionTrace,
+    ) -> str:
+        """Fetch KB doctrine, precedent, and outcome stats; return formatted context block."""
         kb_query = (
             f"{sized.category.value} signal in {macro.regime} market, "
             f"VIX {macro.vix:.1f}, supplier {sized.supplier}"
@@ -510,26 +530,32 @@ class ZeusOrchestrator:
             logger.warning("[ZEUS] KB outcomes query failed: %s", exc)
             outcome_stats = "unavailable"
 
-        # Portfolio concentration context — Director must see the whole book
-        open_positions   = self.argus.open_position_count()
-        portfolio_state  = self.argus.portfolio_state()
-        current_dd       = portfolio_state.current_drawdown_pct
-        equity           = portfolio_state.total_equity
-
-        kb_context = "\n\n".join([
+        if not knowledge_chunks and not past_decisions:
+            return "No KB context loaded yet — operating on first principles."
+        return "\n\n".join([
             "--- TRADING DOCTRINE (KB) ---",
             *knowledge_chunks,
             "--- PRECEDENT: SIMILAR PAST DECISIONS ---",
             *past_decisions,
             f"--- STATISTICAL OUTCOMES FOR THIS CONTEXT ---\n{outcome_stats}",
-        ]) if knowledge_chunks or past_decisions else "No KB context loaded yet — operating on first principles."
+        ])
 
+    def _build_director_prompt(
+        self,
+        sized: SizedSignal,
+        macro: MacroContext,
+        kb_context: str,
+    ) -> str:
+        """Assemble the full Director governance prompt from signal + portfolio state."""
+        open_positions  = self.argus.open_position_count()
+        portfolio_state = self.argus.portfolio_state()
+        current_dd      = portfolio_state.current_drawdown_pct
+        equity          = portfolio_state.total_equity
         seniority_level = (
             self._seniority_report.system_level.label()
             if self._seniority_report else "Senior"
         )
-
-        prompt = f"""You are ZEUS — Director of Portfolio Management for Pantheon OS, an autonomous trading operation.
+        return f"""You are ZEUS — Director of Portfolio Management for Pantheon OS, an autonomous trading operation.
 
 Your role is not to rubber-stamp your analysts' recommendations. Your role is to govern the portfolio. You challenge assumptions, identify what your team missed, ensure every investment decision fits the portfolio strategy, and exercise final approval authority with full accountability for outcomes.
 
@@ -596,51 +622,41 @@ Respond in this exact JSON format — no markdown, no fences, raw JSON only:
   "reasoning": "3-5 sentences: investment thesis assessment, portfolio fit verdict, key risk identified, final decision rationale"
 }}"""
 
-        try:
-            response = self._claude.messages.create(
-                model="claude-haiku-4-5-20251001",
-                max_tokens=800,   # Director reasoning needs room — 3-5 sentences + flags
-                messages=[{"role": "user", "content": prompt}],
-            )
-            raw = response.content[0].text.strip()
-            match = re.search(r"\{.*\}", raw, re.DOTALL)
-            if not match:
-                raise ValueError("No JSON found in Claude response")
-            data = json.loads(match.group())
+    def _parse_llm_response(
+        self,
+        raw: str,
+        sized: SizedSignal,
+    ) -> tuple[bool, str, Optional[float]]:
+        """Parse Claude's JSON response into (approved, reasoning, override_size)."""
+        match = re.search(r"\{.*\}", raw, re.DOTALL)
+        if not match:
+            raise ValueError("No JSON found in Claude response")
+        data = json.loads(match.group())
 
-            approved          = bool(data.get("approved", False))
-            reasoning         = data.get("reasoning", "")
-            governance_flags  = data.get("governance_flags", [])
-            override          = data.get("position_size_override")
-            override_size     = float(override) if override is not None else None
+        approved         = bool(data.get("approved", False))
+        reasoning        = data.get("reasoning", "")
+        governance_flags = data.get("governance_flags", [])
+        override         = data.get("position_size_override")
+        override_size    = float(override) if override is not None else None
+        llm_confidence   = data.get("confidence", 1.0)
 
-            # Append governance flags to reasoning so they appear in the trace
-            if governance_flags:
-                flags_text = " | FLAGS: " + "; ".join(governance_flags)
-                reasoning  = reasoning + flags_text
+        if governance_flags:
+            reasoning += " | FLAGS: " + "; ".join(governance_flags)
 
-            # Hard floor: confidence below threshold → reject regardless
-            llm_confidence = data.get("confidence", 1.0)
-            if llm_confidence < self.config.min_zeus_confidence:
-                approved   = False
-                reasoning += f" [REJECTED: Director confidence {llm_confidence:.2f} below floor {self.config.min_zeus_confidence:.2f}]"
+        if llm_confidence < self.config.min_zeus_confidence:
+            approved   = False
+            reasoning += f" [REJECTED: Director confidence {llm_confidence:.2f} below floor {self.config.min_zeus_confidence:.2f}]"
 
-            # Sanity check: short reasoning means model didn't think carefully
-            if len(reasoning) < 80:
-                logger.warning("[ZEUS] Director reasoning suspiciously short (%d chars) — treating as low confidence", len(reasoning))
-                approved = False
-                reasoning += " [REJECTED: insufficient reasoning quality]"
+        if len(reasoning) < 80:
+            logger.warning("[ZEUS] Director reasoning suspiciously short (%d chars) — treating as low confidence", len(reasoning))
+            approved   = False
+            reasoning += " [REJECTED: insufficient reasoning quality]"
 
-            logger.info(
-                "[ZEUS] Director decision — approved=%s confidence=%.2f override_size=%s flags=%s",
-                approved, llm_confidence, override_size, governance_flags,
-            )
-            return approved, reasoning, override_size
-
-        except Exception as exc:
-            logger.error("[ZEUS] LLM reasoning failed: %s — defaulting to Pattern score.", exc)
-            fallback_approved = sized.confidence >= self.config.min_zeus_confidence
-            return fallback_approved, f"LLM call failed ({exc}). Used Pattern confidence fallback.", None
+        logger.info(
+            "[ZEUS] Director decision — approved=%s confidence=%.2f override_size=%s flags=%s",
+            approved, llm_confidence, override_size, governance_flags,
+        )
+        return approved, reasoning, override_size
 
     # ------------------------------------------------------------------
     # Helpers

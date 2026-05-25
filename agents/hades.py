@@ -6,6 +6,7 @@ Compliance firewall. Imports only from core.types — never from other agents.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Optional
 
 from core.types import AgentHealth, FilteredSignal, RawSignal, SignalCategory
@@ -13,9 +14,17 @@ from core.agent_knowledge import AgentKnowledgeBase
 
 logger = logging.getLogger("hades")
 
+# Base blocklists — extend at runtime via env vars (comma-separated)
 _OFAC_BLOCKLIST: set[str] = {"RUSAL", "SBERBANK", "ROSNEFT"}
 _ESG_BLOCKLIST:  set[str] = {"tobacco", "weapons", "cluster munition", "coal"}
 _BLOCKED_TICKERS: set[str] = set()
+
+
+def _load_env_set(env_var: str, base: set[str]) -> set[str]:
+    """Merge base set with comma-separated additions from env var."""
+    extra = os.getenv(env_var, "")
+    additions = {e.strip() for e in extra.split(",") if e.strip()}
+    return base | additions
 
 
 class HadesAgent:
@@ -25,9 +34,9 @@ class HadesAgent:
         esg_blocklist:     set[str] | None = None,
         blocked_tickers:   set[str] | None = None,
     ):
-        self._ofac    = ofac_blocklist  or _OFAC_BLOCKLIST
-        self._esg     = esg_blocklist   or _ESG_BLOCKLIST
-        self._tickers = blocked_tickers or _BLOCKED_TICKERS
+        self._ofac    = ofac_blocklist  or _load_env_set("HADES_OFAC_BLOCKLIST",    _OFAC_BLOCKLIST)
+        self._esg     = esg_blocklist   or _load_env_set("HADES_ESG_BLOCKLIST",     _ESG_BLOCKLIST)
+        self._tickers = blocked_tickers or _load_env_set("HADES_BLOCKED_TICKERS",   _BLOCKED_TICKERS)
         self.kb = AgentKnowledgeBase("hades")
 
     def health(self) -> AgentHealth:
