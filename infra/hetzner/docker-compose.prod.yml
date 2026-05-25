@@ -13,28 +13,30 @@
 services:
 
   # ── IB Gateway (headless paper trading) ────────────────────────
-  # ghcr.io/unusualbusiness/ibgateway auto-logs in via env vars.
-  # Paper port 4002 is internal only — Ares connects via service name.
+  # gnzsnz/ib-gateway:stable — IBC automates GUI login via env vars.
+  # EXISTING_SESSION_DETECTED_ACTION=primary: dismisses any pre-existing
+  # IBKR session so headless login always succeeds unattended.
+  # Paper port 4002 is internal only — Ares/Argus connect via service name.
   ibgateway:
-    image: gnzsnz/ib-gateway:latest
+    image: gnzsnz/ib-gateway:stable
     container_name: pantheon_ibgateway
     restart: always
     environment:
       - TWS_USERID=${IB_USERNAME}
       - TWS_PASSWORD=${IB_PASSWORD}
       - TRADING_MODE=paper
-      - TWS_SETTINGS_PATH=/root/ibgateway
+      - EXISTING_SESSION_DETECTED_ACTION=primary
       - TZ=Europe/Berlin
     ports:
       - "4002:4002"
     volumes:
-      - ibgateway_config:/root/ibgateway
+      - ibgateway_config:/home/ibgateway
     healthcheck:
       test: ["CMD-SHELL", "nc -z localhost 4002 || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 60s
+      start_period: 90s
     networks:
       - pantheon
 
