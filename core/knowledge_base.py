@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -29,8 +30,8 @@ from core.types import DecisionTrace
 
 logger = logging.getLogger("knowledge_base")
 
-KNOWLEDGE_DIR = Path("knowledge")
-CHROMA_PATH   = Path("data/chroma")
+KNOWLEDGE_DIR = Path(os.getenv("KNOWLEDGE_DIR", "knowledge"))
+CHROMA_PATH   = Path(os.getenv("CHROMA_PATH", "knowledge/chroma"))
 
 
 class KnowledgeBase:
@@ -160,7 +161,7 @@ class KnowledgeBase:
                 "zeus_override_reason": trace.zeus_override_reason,
                 "trade_placed":       trace.trade_placed,
                 "symbol":             trace.symbol,
-                "side":               trace.side,
+                "side":               trace.side or None,
                 "fill_price":         trace.fill_price,
                 "pnl_pct":            trace.pnl_pct,
                 "killed_at_stage":    trace.killed_at_stage,
