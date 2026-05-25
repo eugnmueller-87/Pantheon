@@ -2,13 +2,41 @@
 # Frankfurt DC, 2 vCPU, 4 GB RAM
 #
 # Services:
+#   ibgateway   — Interactive Brokers Gateway (headless, paper port 4002)
 #   zeus        — trading pipeline (port 8080)
 #   dashboard   — FastAPI WebSocket backend (port 8081)
 #   grafana     — analytics dashboards (port 3000, proxied via nginx)
 #   redis       — local cache fallback
+#   kafka       — event bus (KRaft, no Zookeeper)
 #   nginx       — SSL termination + reverse proxy
 
 services:
+
+  # ── IB Gateway (headless paper trading) ────────────────────────
+  # ghcr.io/unusualbusiness/ibgateway auto-logs in via env vars.
+  # Paper port 4002 is internal only — Ares connects via service name.
+  ibgateway:
+    image: ghcr.io/unusualbusiness/ibgateway:latest
+    container_name: pantheon_ibgateway
+    restart: always
+    environment:
+      - IBGATEWAY_USER=${IB_USERNAME}
+      - IBGATEWAY_PASSWORD=${IB_PASSWORD}
+      - TRADING_MODE=paper          # paper | live
+      - JAVA_HEAP_SIZE=512m
+      - TZ=Europe/Berlin
+    ports:
+      - "4002:4002"                 # expose for local debugging only — firewall in prod
+    volumes:
+      - ibgateway_config:/root/ibgateway
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 4002 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s             # IB Gateway takes ~45s to start
+    networks:
+      - pantheon
 
   # ── ZEUS Pipeline Server ────────────────────────────────────────
   zeus:
@@ -32,6 +60,7 @@ services:
     depends_on:
       - redis
       - kafka
+      - ibgateway
     networks:
       - pantheon
 
@@ -145,6 +174,7 @@ services:
       - "443:443"
     volumes:
       - ./nginx.prod.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./grafana.htpasswd:/etc/nginx/grafana.htpasswd:ro
       - /etc/letsencrypt:/etc/letsencrypt:ro
       - /var/www/certbot:/var/www/certbot:ro
     depends_on:
@@ -159,6 +189,7 @@ volumes:
   grafana_data:
   redis_data:
   kafka_data:
+  ibgateway_config:
 
 networks:
   pantheon:

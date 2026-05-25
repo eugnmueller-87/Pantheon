@@ -57,8 +57,8 @@ class ArgusAgent:
         telegram_chat_id:       Optional[str]                  = None,
         milestone_manager = None,   # MilestoneManager injected by ZEUS
         default_account_equity: float                          = 100_000.0,
-        ib_host:                str                            = "127.0.0.1",
-        ib_port:                int                            = 7497,
+        ib_host:                str                            = "ibgateway",
+        ib_port:                int                            = 4002,
     ):
         self.max_drawdown_pct  = max_drawdown_pct
         self._on_kill          = on_kill

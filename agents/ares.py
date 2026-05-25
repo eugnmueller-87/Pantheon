@@ -18,13 +18,13 @@ logger = logging.getLogger("ares")
 
 
 class AresAgent:
-    IB_PAPER_PORT = 7497
-    IB_LIVE_PORT  = 7496
+    IB_PAPER_PORT = 4002
+    IB_LIVE_PORT  = 4001
 
     def __init__(
         self,
         paper: bool = True,
-        host: str = "127.0.0.1",
+        host: str = "ibgateway",
         stop_loss_pct: float = 0.03,
         take_profit_pct: float = 0.06,
         default_account_equity: float = 100_000.0,

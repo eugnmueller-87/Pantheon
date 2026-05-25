@@ -125,6 +125,7 @@ class ZeusOrchestrator:
             if self.config.mock_execution
             else AresAgent(
                 paper=self.config.paper_trading,
+                host=os.getenv("IB_HOST", "ibgateway"),
                 stop_loss_pct=self.config.stop_loss_pct,
                 take_profit_pct=self.config.take_profit_pct,
             )
@@ -135,8 +136,8 @@ class ZeusOrchestrator:
             alert_fn=self._send_alert,
             milestone_manager=self.milestone,
             default_account_equity=self.config.default_account_equity,
-            ib_host=os.getenv("IB_HOST", "127.0.0.1"),
-            ib_port=int(os.getenv("IB_PORT", "7497")),
+            ib_host=os.getenv("IB_HOST", "ibgateway"),
+            ib_port=int(os.getenv("IB_PORT", "4002")),
         )
         self.apollo    = ApolloAgent(knowledge_base=self.kb)
 
