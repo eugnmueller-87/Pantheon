@@ -14,8 +14,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # App source
 COPY . .
 
-# Non-root user
-RUN useradd -r -u 1001 pantheon && chown -R pantheon:pantheon /app
+# Non-root user with home dir for ChromaDB
+RUN useradd -r -u 1001 -m pantheon && chown -R pantheon:pantheon /app
 USER pantheon
 
 EXPOSE 8080 8081
