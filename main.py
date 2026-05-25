@@ -193,9 +193,13 @@ class ZeusHandler(BaseHTTPRequestHandler):
 
 
 def run_webhook_server(host: str = "0.0.0.0", port: int = 8080):
+    from socketserver import ThreadingMixIn
+    class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
+        daemon_threads = True
+
     global _zeus
     _zeus = build_zeus()
-    server = HTTPServer((host, port), ZeusHandler)
+    server = ThreadedHTTPServer((host, port), ZeusHandler)
     logger.info("[MAIN] ZEUS webhook server on %s:%d", host, port)
     logger.info("[MAIN] n8n → POST http://localhost:%d/run", port)
     try:
