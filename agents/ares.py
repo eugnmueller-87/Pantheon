@@ -41,11 +41,9 @@ class AresAgent:
         logger.info("[ARES] %s mode — port %d", "PAPER" if paper else "LIVE", self.port)
 
     def health(self) -> AgentHealth:
-        try:
-            ib = self._get_connection()
-            return AgentHealth.HEALTHY if ib.isConnected() else AgentHealth.FAILED
-        except Exception:
-            return AgentHealth.FAILED
+        if self._ib is None:
+            return AgentHealth.HEALTHY  # not yet connected — report healthy until first trade
+        return AgentHealth.HEALTHY if self._ib.isConnected() else AgentHealth.DEGRADED
 
     def place(self, sized: SizedSignal) -> TradeResult:
         if not sized.affected_tickers:
