@@ -14,7 +14,7 @@
 ![Cloudflare](https://img.shields.io/badge/CDN-Cloudflare%20Pages-F38020?style=flat&logo=cloudflare&logoColor=white)
 ![FRED](https://img.shields.io/badge/Macro-FRED%20API-003087?style=flat)
 
-> **8-agent autonomous trading system. Eight gods, one mission. ZEUS is the supreme orchestrator — all agents report to it. Fully deployed, CI/CD green, live on `moremanamoreproblems.de`.**
+> **8-agent autonomous trading system. Eight gods, one mission. ZEUS is the supreme orchestrator — all agents report to it. Fully deployed, paper trading live, self-scheduling every 15 minutes on Hetzner.**
 
 ---
 
@@ -47,7 +47,7 @@
         ↓  MacroContext (or SUPPRESS)
   [4] Pythia  — Pattern & Sizing       ← Supabase hit rates → Kelly-sized positions
         ↓  SizedSignal (or SKIP)
-  [5] ZEUS    — LLM Reasoning          ← Claude Haiku · ChromaDB KB · past decisions
+  [5] ZEUS    — LLM Reasoning          ← Claude Sonnet · ChromaDB KB · past decisions
         ↓  approved / resized / rejected
   [6] Ares    — Trade Execution        ← IBKR bracket order (entry + SL + TP)
         ↓  TradeResult
@@ -83,7 +83,7 @@
 | 2 | **Hades** | Lord of the underworld — judges who passes | Compliance firewall. OFAC, EU sanctions (BaFin/Reg 833/2014), ESG sector flags, LkSG violations → hard kill or severity downgrade. Full audit trail. |
 | 3 | **Artemis** | Goddess of the hunt — tracks conditions, picks the moment | Fetches VIX, S&P 500 1-month return, and 6 sector ETFs. Classifies market regime (bull/bear/sideways). Suppresses signals that conflict with macro environment. 15-min cache. |
 | 4 | **Pythia** | Oracle of Delphi — reads patterns, predicts outcomes | Learning agent. Every signal → outcome in Supabase. Derives position size from historical hit rates per `{category}×{regime}×{VIX band}`. Kelly-inspired sizing (capped at 5%). |
-| 5 | **ZEUS** | King of Olympus — final word | LLM reasoning via Claude Haiku. Queries ChromaDB knowledge base. Approves, resizes, or rejects trades with structured JSON rationale. |
+| 5 | **ZEUS** | King of Olympus — final word | LLM reasoning via Claude Sonnet. Queries ChromaDB knowledge base. Approves, resizes, or rejects trades with structured JSON rationale. |
 | 6 | **Ares** | God of decisive action — executes the strike | Places bracket orders on Interactive Brokers via `ib_insync`. Entry + 3% stop-loss + 6% take-profit. XETRA-aware. Paper port 7497 / live port 7496. |
 | 7 | **Argus** | Hundred-eyed giant — watches everything, never sleeps | Tracks portfolio equity and drawdown in real time. Emergency halt + Telegram alert if drawdown ≥ 8%. Backfills closed-trade P&L into Pythia and ChromaDB. |
 | 8 | **Apollo** | God of knowledge and truth — the librarian | Runs daily: ingests arXiv q-fin papers, crawls Hermes for earnings transcripts, maintains the live supplier→ticker map, runs the self-improvement loop. One-shot historical bootstrap loads 4 years of data before paper trading begins. |
@@ -94,7 +94,7 @@
 
 | Component | Detail |
 |---|---|
-| **Server** | Hostinger VPS — Ubuntu 24.04, 2 vCPU, 4 GB RAM |
+| **Server** | Hetzner VPS — Ubuntu 24.04, 2 vCPU, 4 GB RAM |
 | **Domain** | `moremanamoreproblems.de` → SSL via Let's Encrypt |
 | **Containers** | `zeus` · `dashboard` · `grafana` · `redis` · `nginx` (Docker Compose) |
 | **Image registry** | GitHub Container Registry (`ghcr.io/eugnmueller-87/pantheon`) |
@@ -128,7 +128,7 @@ All jobs must pass before deploy. The quality gate blocks shipping broken code.
 | Macro data | FRED API (St. Louis Fed) — Fed Funds, yield curve, credit spreads, VIX |
 | Knowledge base | ChromaDB — local persistent vector store |
 | Trade memory | Supabase PostgreSQL (SQLite fallback in dev) |
-| LLM reasoning | Claude Haiku — ~$0.001/call, structured JSON output |
+| LLM reasoning | Claude Sonnet 4.6 — ~$0.01/call, structured JSON output |
 | Execution | Interactive Brokers via `ib_insync` |
 | Alerts | Telegram Bot API |
 | Intelligence bridge | Upstash Redis — shared with SpendLens |
@@ -253,6 +253,12 @@ Live at `https://moremanamoreproblems.de/grafana/` — provisioned automatically
 | Agent Health | All 8 agents with live status and last-check timestamp |
 | Recent Trades | Last 50 trades, WIN/LOSS/OPEN color-coded |
 | Monthly Returns | Win rate + avg P&L % by month |
+| Agent Seniority Levels | Per-agent level, score, live-trading clearance |
+| System Seniority | Current system-wide level (TRAINEE → DIRECTOR) |
+| Anthropic Budget Used | Gauge — cumulative spend vs $25 budget |
+| Budget Remaining | Dollar amount left before manual top-up needed |
+| Daily LLM Cost | Time-series — daily Anthropic API spend |
+| Token Usage by Symbol | Which tickers are driving LLM cost |
 
 ---
 
@@ -331,28 +337,37 @@ ZEUS pipeline run
 
 ## Roadmap
 
+### Done
 - [x] 8-agent pipeline (Icarus → Hades → Artemis → Pythia → ZEUS → Ares → Argus + Apollo)
-- [x] Supabase PostgreSQL — 11 tables, pgvector, RLS
+- [x] Supabase PostgreSQL — tables, pgvector, RLS disabled for service_role
 - [x] Circuit breakers + Watchdog daemon (zero-outage design)
-- [x] Claude Haiku LLM reasoning step in ZEUS
-- [x] CI/CD — GitHub Actions, 234 tests, auto-deploy to Hetzner
-- [x] Docker image on GHCR, production stack on Hostinger VPS
-- [x] SSL + domain (`moremanamoreproblems.de`) via Let's Encrypt
+- [x] Claude Sonnet 4.6 LLM reasoning in ZEUS with ChromaDB KB + ticker history
+- [x] CI/CD — GitHub Actions, auto-deploy to Hetzner via GHCR
+- [x] Docker image on GHCR, production stack on Hetzner VPS
+- [x] SSL + domain (`moremanamoreproblems.de`) via Let's Encrypt + nginx
 - [x] Grafana monitoring — provisioned dashboards, live Supabase connection
 - [x] Executive dashboard — React + FastAPI WebSocket
 - [x] Upstash Redis bridge → SpendLens intelligence feed
 - [x] Apollo daily research cycle (arXiv, Hermes earnings, ticker map, self-improvement)
-- [x] Senior IC identity framework — all 7 sub-agent skills files rewritten
+- [x] Senior IC identity framework — all agent skills files
 - [x] Config centralization — all risk params in `config/settings.py`
-- [x] Isolation audit — no cross-agent imports, no private attribute access
 - [x] Historical ingestion bootstrap — 4 years earnings, Form 4, FRED macro, EDGAR 8-K
-- [x] FRED API onboarded — Fed Funds, yield curve, credit spreads, VIX, consumer sentiment
-- [x] Cloudflare Pages — React dashboard live at `pantheon-dashboard-ban.pages.dev`
-- [x] IBKR account application submitted (approval pending ~24h)
-- [ ] IBKR paper trading — connect Ares to live execution once account approved
-- [ ] Kafka event bus — decouple Icarus→ZEUS, signal replay, 7-day retention
+- [x] FRED API — Fed Funds, yield curve, credit spreads, VIX, consumer sentiment
+- [x] Cloudflare Pages — React dashboard at `pantheon-dashboard-ban.pages.dev`
+- [x] IB Gateway connected — socat bridge, delayed market data, paper account €1M
+- [x] Kafka event bus — Icarus→ZEUS signal replay, 7-day retention
+- [x] Pipeline self-scheduling — runs every 15 minutes, no n8n needed
+- [x] Agent seniority system — TRAINEE → DIRECTOR progression, live trading gate
+- [x] Anthropic token/cost tracking — per-call USD cost logged to Supabase + Grafana
+
+### In Progress
+- [ ] Trade history accumulation — agents levelling up from TRAINEE as paper trades close
+- [ ] Win rate → seniority → live trading unlock (target: Senior across all agents)
+
+### Next
 - [ ] OpenBB swap in Artemis (DAX + EURO STOXX 50 coverage)
-- [ ] Shadow learning layer — backtester, replay mode, outcome resolver, promotion gate
+- [ ] Shadow learning layer — outcome resolver, promotion gate
+- [ ] Live trading — flip `paper_trading=false` once seniority gates clear
 - [ ] Phase 3 — Crypto layer via Binance EU
 
 ---
