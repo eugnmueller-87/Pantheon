@@ -546,7 +546,7 @@ class ZeusOrchestrator:
                 max_tokens=1500,
                 messages=[{"role": "user", "content": prompt}],
             )
-            self._record_token_usage(response.usage, sized.symbol if sized.affected_tickers else "unknown")
+            self._record_token_usage(response.usage, sized.affected_tickers[0] if sized.affected_tickers else "unknown")
             return self._parse_llm_response(response.content[0].text.strip(), sized)
         except Exception as exc:
             logger.error("[ZEUS] LLM reasoning failed: %s — defaulting to Pattern score.", exc)

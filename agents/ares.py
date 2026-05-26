@@ -72,15 +72,18 @@ class AresAgent:
         contract = Stock(symbol, "SMART", "USD")
         ib.qualifyContracts(contract)
 
+        import math
+        # Request delayed data (no live subscription on paper account)
+        ib.reqMarketDataType(3)  # 3 = delayed, 4 = delayed-frozen
         ticker = ib.reqMktData(contract, "", False, False)
-        ib.sleep(1)
+        ib.sleep(2)
         mid = ticker.midpoint()
-        if mid is None or mid == 0:
+        if mid is None or (isinstance(mid, float) and math.isnan(mid)) or mid == 0:
             mid = ticker.last
-        if mid is None or mid == 0:
+        if mid is None or (isinstance(mid, float) and math.isnan(mid)) or mid == 0:
             mid = ticker.close
         ib.cancelMktData(contract)
-        if mid is None or mid <= 0:
+        if mid is None or (isinstance(mid, float) and math.isnan(mid)) or mid <= 0:
             raise ValueError(f"Could not price {symbol}")
 
         account_val = self._get_account_value(ib)
