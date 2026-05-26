@@ -79,9 +79,11 @@ class PipelineRun:
     killed_at_stage: Optional[str]            = None
     kill_reason:     Optional[str]            = None
 
-    def kill(self, stage: str, reason: str) -> "PipelineRun":
+    def kill(self, stage: str, reason: str, trace: "DecisionTrace | None" = None) -> "PipelineRun":
         self.killed_at_stage = stage
         self.kill_reason = reason
+        if trace is not None:
+            self.trace = trace
         logger.info("[ZEUS] Signal killed at %s — %s", stage, reason)
         return self
 
@@ -374,7 +376,7 @@ class ZeusOrchestrator:
             trace.kill_reason = "compliance block or Hades circuit open"
             trace.killed_at_stage = "hades"
             self._write_trace(trace)
-            return run.kill("hades", trace.kill_reason)
+            return run.kill("hades", trace.kill_reason, trace)
         trace.hades_notes = filtered.notes
         run.filtered_signal = filtered
         self.bridge.push_supplier_risk(filtered)   # → SpendLens vendor risk
@@ -398,7 +400,7 @@ class ZeusOrchestrator:
             trace.killed_at_stage = "trend"
             trace.kill_reason     = macro.suppress_reason or "macro suppression"
             self._write_trace(trace)
-            return run.kill("artemis", trace.kill_reason)
+            return run.kill("artemis", trace.kill_reason, trace)
         run.macro_context = macro
         self.bridge.push_macro(macro)              # → SpendLens category strategy
 
@@ -418,7 +420,7 @@ class ZeusOrchestrator:
             trace.killed_at_stage = "pattern"
             trace.kill_reason     = sized.skip_reason or "low confidence"
             self._write_trace(trace)
-            return run.kill("pythia", trace.kill_reason)
+            return run.kill("pythia", trace.kill_reason, trace)
         run.sized_signal = sized
 
         # Stage 4 — Pre-decision enrichment: Apollo researches the company,
@@ -454,14 +456,14 @@ class ZeusOrchestrator:
             trace.killed_at_stage = "zeus"
             trace.kill_reason     = "ZEUS LLM reasoning rejected trade"
             self._write_trace(trace)
-            return run.kill("zeus", trace.kill_reason)
+            return run.kill("zeus", trace.kill_reason, trace)
 
         # Stage 5 — Portfolio headroom check
         if self.argus.open_position_count() >= self.config.max_open_positions:
             trace.killed_at_stage = "zeus"
             trace.kill_reason     = "max open positions reached"
             self._write_trace(trace)
-            return run.kill("zeus", trace.kill_reason)
+            return run.kill("zeus", trace.kill_reason, trace)
 
         # Stage 5b — Seniority position size ceiling
         if self._seniority_report is not None:
