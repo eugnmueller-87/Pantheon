@@ -18,7 +18,7 @@ logger = logging.getLogger("ares")
 
 
 class AresAgent:
-    IB_PAPER_PORT = 4002
+    IB_PAPER_PORT = 4004  # socat bridge inside ibgateway container (4004→127.0.0.1:4002)
     IB_LIVE_PORT  = 4001
 
     def __init__(

@@ -142,7 +142,7 @@ class ZeusOrchestrator:
             milestone_manager=self.milestone,
             default_account_equity=self.config.default_account_equity,
             ib_host=os.getenv("IB_HOST", "ibgateway"),
-            ib_port=int(os.getenv("IB_PORT", "4002")),
+            ib_port=int(os.getenv("IB_PORT", "4004")),
         )
 
         # Shadow learning layer — wire KB into Argus's OutcomeResolver

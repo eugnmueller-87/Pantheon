@@ -58,7 +58,7 @@ class ArgusAgent:
         milestone_manager = None,   # MilestoneManager injected by ZEUS
         default_account_equity: float                          = 100_000.0,
         ib_host:                str                            = "ibgateway",
-        ib_port:                int                            = 4002,
+        ib_port:                int                            = 4004,  # socat bridge (4004→127.0.0.1:4002)
     ):
         self.max_drawdown_pct  = max_drawdown_pct
         self._on_kill          = on_kill

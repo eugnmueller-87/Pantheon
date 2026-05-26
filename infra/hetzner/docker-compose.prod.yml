@@ -26,8 +26,8 @@ services:
       - TWS_PASSWORD=${IB_PASSWORD}
       - TRADING_MODE=paper
       - EXISTING_SESSION_DETECTED_ACTION=primary
-      - OVERRIDE_TWSAPIPORT=4002
-      - ACCEPT_INCOMING_CONNECTION=accept
+      - TWS_ACCEPT_INCOMING=accept
+      - READ_ONLY_API=no
       - TZ=Europe/Berlin
     ports:
       - "4002:4002"
