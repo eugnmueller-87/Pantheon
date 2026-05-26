@@ -209,10 +209,16 @@ class ArgusAgent:
             logger.warning("[ARGUS] Supabase persist failed: %s", exc)
 
     def _get_connection(self):
-        if self._ib is None or not self._ib.isConnected():
-            import asyncio
-            from ib_insync import IB
-            asyncio.set_event_loop(asyncio.new_event_loop())
+        import asyncio
+        from ib_insync import IB
+        asyncio.set_event_loop(asyncio.new_event_loop())
+        connected = False
+        if self._ib is not None:
+            try:
+                connected = self._ib.isConnected()
+            except Exception:
+                connected = False
+        if not connected:
             self._ib = IB()
             self._ib.connect(self._ib_host, self._ib_port, clientId=2)
         return self._ib

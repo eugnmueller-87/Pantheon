@@ -114,10 +114,16 @@ class AresAgent:
         return self.default_account_equity
 
     def _get_connection(self):
-        if self._ib is None or not self._ib.isConnected():
-            import asyncio
-            from ib_insync import IB
-            asyncio.set_event_loop(asyncio.new_event_loop())
+        import asyncio
+        from ib_insync import IB
+        asyncio.set_event_loop(asyncio.new_event_loop())
+        connected = False
+        if self._ib is not None:
+            try:
+                connected = self._ib.isConnected()
+            except Exception:
+                connected = False
+        if not connected:
             self._ib = IB()
             self._ib.connect(self.host, self.port, clientId=1)
             logger.info("[ARES] Connected to IB %s:%d", self.host, self.port)
