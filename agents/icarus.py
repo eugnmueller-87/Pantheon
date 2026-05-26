@@ -144,6 +144,9 @@ def _resolve_ticker(supplier: str) -> str | None:
     return None
 
 
+_MAX_SIGNAL_AGE_HOURS = 72  # drop signals older than 3 days — post-earnings window closed
+
+
 def _map_signal(item: dict) -> Optional[RawSignal]:
     signal_type = item.get("signal_type", "OTHER")
     category = _HERMES_TYPE_MAP.get(signal_type, SignalCategory.NEUTRAL)
@@ -163,6 +166,11 @@ def _map_signal(item: dict) -> Optional[RawSignal]:
         published_at = datetime.fromisoformat(item["published"].replace("Z", "+00:00"))
     except Exception:
         published_at = datetime.now(timezone.utc)
+
+    age_hours = (datetime.now(timezone.utc) - published_at).total_seconds() / 3600
+    if age_hours > _MAX_SIGNAL_AGE_HOURS:
+        logger.info("[ICARUS] Dropping stale signal (%dh old): %s", int(age_hours), item.get("title", "")[:60])
+        return None
 
     return RawSignal(
         signal_id         = _sanitize_signal_id(item.get("id", "")),
