@@ -192,13 +192,38 @@ class ZeusHandler(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
 
+def _auto_run_loop(interval_seconds: int):
+    """Background thread: run the pipeline on a fixed schedule."""
+    import threading
+    logger.info("[MAIN] Auto-run scheduler started — every %ds", interval_seconds)
+    time.sleep(30)  # give Zeus time to fully initialise before first run
+    while True:
+        try:
+            if _zeus and _zeus.status.value != "halted":
+                logger.info("[MAIN] Auto-run triggered")
+                runs = _zeus.run_once()
+                logger.info("[MAIN] Auto-run complete — %d signal(s) processed", len(runs))
+        except Exception as exc:
+            logger.exception("[MAIN] Auto-run error: %s", exc)
+        time.sleep(interval_seconds)
+
+
 def run_webhook_server(host: str = "0.0.0.0", port: int = 8080):
     from socketserver import ThreadingMixIn
+    import threading
+
     class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
         daemon_threads = True
 
     global _zeus
     _zeus = build_zeus()
+
+    # Auto-run pipeline every RUN_INTERVAL seconds (default 15 min)
+    interval = int(os.getenv("RUN_INTERVAL", "900"))
+    t = threading.Thread(target=_auto_run_loop, args=(interval,), daemon=True)
+    t.start()
+    logger.info("[MAIN] Auto-scheduler: pipeline every %ds", interval)
+
     server = ThreadedHTTPServer((host, port), ZeusHandler)
     logger.info("[MAIN] ZEUS webhook server on %s:%d", host, port)
     logger.info("[MAIN] n8n → POST http://localhost:%d/run", port)
