@@ -1,7 +1,10 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
 
-const WS_URL = 'ws://localhost:8081/ws'
+const WS_URL = import.meta.env.VITE_WS_URL ||
+  (window.location.hostname === 'localhost'
+    ? 'ws://localhost:8081/ws'
+    : 'wss://moremanamoreproblems.de/ws')
 
 const AGENTS = [
   { id: 'icarus',  label: 'ICARUS',  sub: 'Signal Watcher',    icon: '🦅' },
