@@ -9,10 +9,9 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import Optional
 
-from core.types import AgentHealth, SignalCategory, SizedSignal, TradeResult
 from core.agent_knowledge import AgentKnowledgeBase
+from core.types import AgentHealth, SignalCategory, SizedSignal, TradeResult
 
 logger = logging.getLogger("ares")
 

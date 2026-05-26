@@ -10,8 +10,8 @@ These tests verify stage transitions, vault math, and risk parameters.
 """
 
 import pytest
-from core.milestone_manager import MilestoneManager, Stage, STAGES, _stage_for_equity
 
+from core.milestone_manager import STAGES, MilestoneManager, Stage, _stage_for_equity
 
 # ── Stage detection ────────────────────────────────────────────────────────────
 

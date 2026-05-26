@@ -15,7 +15,6 @@ import pytest
 
 from core.seniority import Level, SeniorityEvaluator, SeniorityReport
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

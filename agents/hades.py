@@ -9,8 +9,8 @@ import logging
 import os
 from typing import Optional
 
-from core.types import AgentHealth, FilteredSignal, RawSignal, SignalCategory
 from core.agent_knowledge import AgentKnowledgeBase
+from core.types import AgentHealth, FilteredSignal, RawSignal
 
 logger = logging.getLogger("hades")
 

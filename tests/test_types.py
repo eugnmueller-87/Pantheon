@@ -6,14 +6,23 @@ If a field is missing, mistyped, or a property breaks, every
 downstream agent silently misbehaves. These tests are the spec.
 """
 
-import pytest
-from datetime import datetime, timezone
 from dataclasses import fields
+from datetime import datetime, timezone
+
+import pytest
 
 from core.types import (
-    AgentHealth, DecisionTrace, FilteredSignal, MacroContext,
-    MarketRegime, PipelineStatus, RawSignal, Severity,
-    SignalCategory, SizedSignal, TradeResult,
+    AgentHealth,
+    DecisionTrace,
+    FilteredSignal,
+    MacroContext,
+    MarketRegime,
+    PipelineStatus,
+    RawSignal,
+    Severity,
+    SignalCategory,
+    SizedSignal,
+    TradeResult,
 )
 
 

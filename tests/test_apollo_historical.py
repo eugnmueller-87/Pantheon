@@ -10,14 +10,14 @@ Tests verify:
   - KnowledgeBase.add_literature() doc_id parameter works
 """
 
-import pytest
-from unittest.mock import MagicMock, patch, call
-import pandas as pd
 from datetime import datetime, timezone
+from unittest.mock import MagicMock, call, patch
+
+import pandas as pd
+import pytest
 
 from agents.apollo_historical import HistoricalIngestionPipeline
 from core.knowledge_base import KnowledgeBase
-
 
 # ── Fixtures ───────────────────────────────────────────────────────────────────
 

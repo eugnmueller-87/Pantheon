@@ -12,18 +12,19 @@ These run without any network calls (mocked yfinance) and
 without IBKR connection. All logic is exercised in isolation.
 """
 
-import pytest
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
-import pandas as pd
-import uuid
 
-from core.types import RawSignal, SignalCategory, Severity, MarketRegime
-from agents.hades import HadesAgent
-from agents.artemis import ArtemisAgent as TrendAgent
-from agents.pythia import PythiaAgent as PatternAgent
+import pandas as pd
+import pytest
+
 from agents.ares_mock import AresMockAgent as MockExecutionAgent
+from agents.artemis import ArtemisAgent as TrendAgent
+from agents.hades import HadesAgent
+from agents.pythia import PythiaAgent as PatternAgent
+from core.types import MarketRegime, RawSignal, Severity, SignalCategory
 
 
 def _raw(

@@ -25,7 +25,10 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: pip install -r requirements.txt pytest-asyncio pytest-timeout
+        run: pip install -r requirements.txt pytest-asyncio pytest-timeout ruff
+
+      - name: Lint (ruff)
+        run: ruff check .
 
       - name: Run quality gate (144 tests)
         run: pytest tests/ --tb=short -q --strict-markers --timeout=30 -v

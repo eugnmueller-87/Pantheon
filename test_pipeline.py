@@ -14,13 +14,15 @@ import os
 from datetime import datetime
 
 from core.logging_setup import configure_logging
+
 configure_logging(logging.DEBUG)
 
-from agents.icarus import IcarusAgent, RawSignal, SignalCategory, Severity
-from agents.hades import HadesAgent
-from agents.trend import TrendAgent
-from agents.pattern import PatternAgent
 from agents.execution_mock import MockExecutionAgent
+from agents.pattern import PatternAgent
+from agents.trend import TrendAgent
+
+from agents.hades import HadesAgent
+from agents.icarus import IcarusAgent, RawSignal, Severity, SignalCategory
 
 logger = logging.getLogger("test")
 

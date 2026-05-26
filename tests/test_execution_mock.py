@@ -6,16 +6,22 @@ or wrong stop/take-profit prices, the Pattern agent records bad outcome data
 and the learning layer trains on garbage. The math must be exact.
 """
 
-import pytest
 from datetime import datetime, timezone
 from unittest.mock import patch
-import pandas as pd
 
-from core.types import (
-    FilteredSignal, MacroContext, MarketRegime,
-    RawSignal, Severity, SignalCategory, SizedSignal,
-)
+import pandas as pd
+import pytest
+
 from agents.ares_mock import AresMockAgent as MockExecutionAgent
+from core.types import (
+    FilteredSignal,
+    MacroContext,
+    MarketRegime,
+    RawSignal,
+    Severity,
+    SignalCategory,
+    SizedSignal,
+)
 
 _ACCOUNT_EQUITY = 100_000.0   # matches default — used in quantity assertions
 

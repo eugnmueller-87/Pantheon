@@ -1,0 +1,17 @@
+[Unit]
+Description=ZEUS Dashboard
+After=network.target zeus.service
+
+[Service]
+Type=simple
+User=pantheon
+WorkingDirectory=/opt/pantheon
+EnvironmentFile=/opt/pantheon/.env
+ExecStart=/usr/local/bin/python3.11 -m uvicorn dashboard.backend.server:app --host 0.0.0.0 --port 8081
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

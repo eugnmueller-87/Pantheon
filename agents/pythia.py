@@ -17,11 +17,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from core.types import (
-    AgentHealth, FilteredSignal, MacroContext, MarketRegime,
-    SizedSignal, TradeResult,
-)
 from core.agent_knowledge import AgentKnowledgeBase
+from core.types import (
+    AgentHealth,
+    FilteredSignal,
+    MacroContext,
+    SizedSignal,
+    TradeResult,
+)
 
 logger = logging.getLogger("pythia")
 

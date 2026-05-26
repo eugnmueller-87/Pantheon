@@ -13,8 +13,8 @@ from typing import Optional
 
 import yfinance as yf
 
-from core.types import AgentHealth, FilteredSignal, MacroContext, MarketRegime
 from core.agent_knowledge import AgentKnowledgeBase
+from core.types import AgentHealth, FilteredSignal, MacroContext, MarketRegime
 
 logger = logging.getLogger("artemis")
 
@@ -109,8 +109,9 @@ class ArtemisAgent:
         return MarketRegime.SIDEWAYS
 
     def _apply_suppression(self, ctx: MacroContext, signal: FilteredSignal) -> MacroContext:
-        from core.types import SignalCategory
         import dataclasses
+
+        from core.types import SignalCategory
         out = dataclasses.replace(ctx)
         if signal.category == SignalCategory.POSITIVE_NEWS and out.is_bear and out.is_high_volatility:
             out.suppress        = True

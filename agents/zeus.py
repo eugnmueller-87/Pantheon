@@ -18,7 +18,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -27,26 +26,32 @@ from typing import Optional
 
 import anthropic
 
-from core.types import (
-    AgentHealth, DecisionTrace, FilteredSignal, HealthReport,
-    MacroContext, MarketRegime, PipelineStatus, RawSignal,
-    SizedSignal, TradeResult,
-)
-from core.knowledge_base import KnowledgeBase
-from core.circuit_breaker import CircuitBreaker
-from core.watchdog import Watchdog
-from core.redis_bridge import RedisBridge
-from core.milestone_manager import MilestoneManager
-from core.seniority import SeniorityEvaluator, SeniorityReport
-
-from agents.icarus import IcarusAgent
-from agents.hades import HadesAgent
-from agents.artemis import ArtemisAgent
-from agents.pythia import PythiaAgent
+from agents.apollo import ApolloAgent
 from agents.ares import AresAgent
 from agents.ares_mock import AresMockAgent
 from agents.argus import ArgusAgent
-from agents.apollo import ApolloAgent
+from agents.artemis import ArtemisAgent
+from agents.hades import HadesAgent
+from agents.icarus import IcarusAgent
+from agents.pythia import PythiaAgent
+from core.circuit_breaker import CircuitBreaker
+from core.knowledge_base import KnowledgeBase
+from core.milestone_manager import MilestoneManager
+from core.redis_bridge import RedisBridge
+from core.seniority import SeniorityEvaluator, SeniorityReport
+from core.types import (
+    AgentHealth,
+    DecisionTrace,
+    FilteredSignal,
+    HealthReport,
+    MacroContext,
+    MarketRegime,
+    PipelineStatus,
+    RawSignal,
+    SizedSignal,
+    TradeResult,
+)
+from core.watchdog import Watchdog
 
 logger = logging.getLogger("zeus")
 
@@ -183,7 +188,8 @@ class ZeusOrchestrator:
             return []
 
         # Fetch signals: prefer Kafka bus, fall back to direct Icarus call
-        from core.kafka_bus import is_available as kafka_up, consume_raw_signals
+        from core.kafka_bus import consume_raw_signals
+        from core.kafka_bus import is_available as kafka_up
         if kafka_up():
             raw_signals = consume_raw_signals()
             logger.info("[ZEUS] Kafka: consumed %d signal(s).", len(raw_signals))
@@ -268,9 +274,10 @@ class ZeusOrchestrator:
         context key statistics before paper trading begins.
         Safe to run multiple times — synthetic trades are additive.
         """
+        from datetime import datetime, timezone
+
         from core.shadow_learning import Backtester
         from core.types import MacroContext, MarketRegime
-        from datetime import datetime, timezone
 
         macro = MacroContext(
             fetched_at=datetime.now(timezone.utc),
@@ -568,8 +575,9 @@ class ZeusOrchestrator:
         logger.info("[ZEUS] LLM tokens — in=%d out=%d cost=$%.4f symbol=%s",
                     input_tok, output_tok, cost_usd, symbol)
         try:
-            import core.supabase_client as supa
             from datetime import datetime, timezone
+
+            import core.supabase_client as supa
             supa.get_client().table("llm_usage").insert({
                 "model":       "claude-sonnet-4-6",
                 "symbol":      symbol,

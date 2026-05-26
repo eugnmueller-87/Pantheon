@@ -6,20 +6,19 @@ Imports only from core.types — never from other agents.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
-from datetime import datetime, timezone
-from typing import Optional
-
-import json
 import re
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 import requests
 
-from core.types import AgentHealth, RawSignal, SignalCategory, Severity
 from core.agent_knowledge import AgentKnowledgeBase
+from core.types import AgentHealth, RawSignal, Severity, SignalCategory
 
 logger = logging.getLogger("icarus")
 
@@ -238,7 +237,6 @@ class IcarusAgent:
     def _init_redis(self):
         """Connect to Upstash Redis for persistent seen-set. Returns None if unavailable."""
         try:
-            import httpx
             url   = os.getenv("UPSTASH_REDIS_REST_URL", "")
             token = os.getenv("UPSTASH_REDIS_REST_TOKEN", "")
             if not url or not token:

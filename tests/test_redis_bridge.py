@@ -12,12 +12,13 @@ Key invariants:
 """
 
 import json
-import pytest
 from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, call, patch
 
+import pytest
+
+from core.redis_bridge import _DECISION_TTL, _DECISIONS_LIST_KEY, _MACRO_KEY, _SUPPLIER_TTL, RedisBridge
 from core.types import DecisionTrace, FilteredSignal, MacroContext, MarketRegime, RawSignal, Severity, SignalCategory
-from core.redis_bridge import RedisBridge, _MACRO_KEY, _DECISIONS_LIST_KEY, _DECISION_TTL, _SUPPLIER_TTL
 
 
 def _mock_bridge() -> tuple[RedisBridge, MagicMock]:

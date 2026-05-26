@@ -8,6 +8,7 @@ Both failure modes are tested exhaustively.
 """
 
 import time
+
 import pytest
 
 from core.circuit_breaker import CircuitBreaker

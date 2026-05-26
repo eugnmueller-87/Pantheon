@@ -13,8 +13,8 @@ from typing import Optional
 
 import yfinance as yf
 
-from core.types import AgentHealth, SignalCategory, SizedSignal, TradeResult
 from core.agent_knowledge import AgentKnowledgeBase
+from core.types import AgentHealth, SignalCategory, SizedSignal, TradeResult
 
 logger = logging.getLogger("ares.mock")
 

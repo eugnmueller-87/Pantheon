@@ -1,0 +1,13 @@
+target-version = "py311"
+line-length = 120
+
+[lint]
+select = ["E", "F", "W", "I"]
+ignore = [
+    "E701",   # multiple statements on one line — intentional in this codebase
+    "E402",   # module import not at top — intentional for lazy/conditional imports
+    "E501",   # line too long — SQL strings and log messages make this impractical
+]
+
+[lint.per-file-ignores]
+"tests/*" = ["F401"]

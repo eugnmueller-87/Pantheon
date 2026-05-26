@@ -6,16 +6,21 @@ These tests use mocked yfinance to avoid network calls and test the
 regime classification and suppression rules in pure isolation.
 """
 
-import pytest
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
-import pandas as pd
 
-from core.types import (
-    FilteredSignal, MacroContext, MarketRegime,
-    RawSignal, Severity, SignalCategory,
-)
+import pandas as pd
+import pytest
+
 from agents.artemis import ArtemisAgent as TrendAgent
+from core.types import (
+    FilteredSignal,
+    MacroContext,
+    MarketRegime,
+    RawSignal,
+    Severity,
+    SignalCategory,
+)
 
 
 def _filtered(category=SignalCategory.POSITIVE_NEWS) -> FilteredSignal:
@@ -94,7 +99,6 @@ class TestSuppression:
 
     def test_all_signals_suppressed_at_extreme_vix(self):
         trend = self._trend()
-        ctx = self._macro(regime=MarketRegime.BULL, vix=36.0)
         for cat in [SignalCategory.POSITIVE_NEWS, SignalCategory.SUPPLIER_DISRUPTION,
                     SignalCategory.EARNINGS_SURPRISE, SignalCategory.REGULATORY_ACTION]:
             ctx_copy = self._macro(regime=MarketRegime.BULL, vix=36.0)
@@ -127,7 +131,7 @@ class TestCaching:
         trend._cached    = cached_ctx
         trend._cache_time = datetime.now(timezone.utc)
 
-        with patch.object(trend, '_fetch_macro', side_effect=AssertionError("should not fetch")) as mock:
+        with patch.object(trend, '_fetch_macro', side_effect=AssertionError("should not fetch")):
             ctx = trend._get_context()
 
         assert ctx is cached_ctx

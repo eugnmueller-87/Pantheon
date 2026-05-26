@@ -6,18 +6,25 @@ A bug here that doubles the position size on every trade is catastrophic.
 These tests verify the Kelly math and SQLite round-trip are correct.
 """
 
-import pytest
 import sqlite3
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from core.types import (
-    FilteredSignal, MacroContext, MarketRegime,
-    RawSignal, Severity, SignalCategory, SizedSignal, TradeResult,
-)
+import pytest
+
 from agents.pythia import PythiaAgent
 from agents.pythia import PythiaAgent as PatternAgent
+from core.types import (
+    FilteredSignal,
+    MacroContext,
+    MarketRegime,
+    RawSignal,
+    Severity,
+    SignalCategory,
+    SizedSignal,
+    TradeResult,
+)
 
 
 @pytest.fixture

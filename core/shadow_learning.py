@@ -28,13 +28,18 @@ from __future__ import annotations
 import logging
 import sqlite3
 from dataclasses import dataclass, field
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
 from core.types import (
-    DecisionTrace, FilteredSignal, MacroContext, MarketRegime,
-    RawSignal, Severity, SignalCategory,
+    DecisionTrace,
+    FilteredSignal,
+    MacroContext,
+    MarketRegime,
+    RawSignal,
+    Severity,
+    SignalCategory,
 )
 
 logger = logging.getLogger("shadow_learning")

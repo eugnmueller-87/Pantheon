@@ -9,16 +9,17 @@ When KAFKA_ENABLED=true but broker unreachable, functions return False/[] silent
 from __future__ import annotations
 
 import os
-import pytest
-from unittest.mock import MagicMock, patch
 from datetime import datetime, timezone
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 def _make_signal():
-    from core.types import RawSignal, SignalCategory, Severity
+    from core.types import RawSignal, Severity, SignalCategory
     return RawSignal(
         signal_id         = "test-sig-001",
         source_url        = "https://example.com",
@@ -220,7 +221,7 @@ class TestKafkaHappyPath:
 
 class TestSerialisation:
     def test_signal_roundtrip(self):
-        from core.kafka_bus import _signal_to_dict, _dict_to_signal
+        from core.kafka_bus import _dict_to_signal, _signal_to_dict
         sig = _make_signal()
         d = _signal_to_dict(sig)
         restored = _dict_to_signal(d)
@@ -290,7 +291,7 @@ class TestIcarusKafkaIntegration:
 class TestZeusKafkaIntegration:
     def test_run_once_uses_direct_fetch_when_kafka_down(self):
         """When Kafka unavailable, run_once calls Icarus.fetch directly."""
-        with patch("core.kafka_bus.is_available", return_value=False) as mock_ka:
+        with patch("core.kafka_bus.is_available", return_value=False):
             # Verify the branch: kafka down → is_available returns False
             from core.kafka_bus import is_available
             assert is_available() is False
@@ -300,7 +301,7 @@ class TestZeusKafkaIntegration:
         sig = _make_signal()
         with patch("core.kafka_bus.is_available", return_value=True):
             with patch("core.kafka_bus.consume_raw_signals", return_value=[sig]) as mock_consume:
-                from core.kafka_bus import is_available, consume_raw_signals
+                from core.kafka_bus import consume_raw_signals, is_available
                 assert is_available() is True
                 result = consume_raw_signals()
         assert len(result) == 1

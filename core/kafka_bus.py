@@ -19,9 +19,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from dataclasses import asdict
 from datetime import datetime, timezone
-from typing import Iterator, Optional
 
 logger = logging.getLogger("kafka_bus")
 
@@ -111,8 +109,8 @@ def consume_raw_signals(
     if not ENABLED:
         return []
     try:
-        from kafka import KafkaConsumer, TopicPartition
-        from core.types import RawSignal, SignalCategory, Severity
+        from kafka import KafkaConsumer
+
         consumer = KafkaConsumer(
             TOPIC_RAW_SIGNALS,
             bootstrap_servers=BOOTSTRAP,
@@ -178,8 +176,7 @@ def _signal_to_dict(signal) -> dict:
 
 
 def _dict_to_signal(d: dict):
-    from core.types import RawSignal, SignalCategory, Severity
-    from datetime import datetime, timezone
+    from core.types import RawSignal, Severity, SignalCategory
     try:
         pub = datetime.fromisoformat(d["published_at"]) if d.get("published_at") else datetime.now(timezone.utc)
     except Exception:

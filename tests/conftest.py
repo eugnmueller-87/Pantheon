@@ -9,9 +9,10 @@ Isolation rules:
 """
 
 import os
-import pytest
+from unittest.mock import MagicMock, patch
+
 import pandas as pd
-from unittest.mock import patch, MagicMock
+import pytest
 
 # Block any accidental real API calls during tests
 os.environ.setdefault("ANTHROPIC_API_KEY",        "test-key-not-real")

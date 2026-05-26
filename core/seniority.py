@@ -48,7 +48,6 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import IntEnum
 from pathlib import Path
-from typing import Optional
 
 logger = logging.getLogger("seniority")
 

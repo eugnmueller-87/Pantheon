@@ -206,7 +206,6 @@ class ZeusHandler(BaseHTTPRequestHandler):
 
 def _auto_run_loop(interval_seconds: int):
     """Background thread: run the pipeline on a fixed schedule."""
-    import threading
     logger.info("[MAIN] Auto-run scheduler started — every %ds", interval_seconds)
     time.sleep(30)  # give Zeus time to fully initialise before first run
     while True:
@@ -227,8 +226,8 @@ def _auto_run_loop(interval_seconds: int):
 
 
 def run_webhook_server(host: str = "0.0.0.0", port: int = 8080):
-    from socketserver import ThreadingMixIn
     import threading
+    from socketserver import ThreadingMixIn
 
     class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
         daemon_threads = True

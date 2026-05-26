@@ -10,20 +10,33 @@ Tests cover all 4 components:
 No network calls — all external dependencies mocked.
 """
 
-import pytest
 from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch
 from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 from core.shadow_learning import (
-    OutcomeResolver, PromotionGate, Backtester, ReplayEngine,
-    BacktestResult, ReplayResult, _MIN_SAMPLES, _PRIOR_WEIGHT, _PRIOR_WIN_RATE,
+    _MIN_SAMPLES,
+    _PRIOR_WEIGHT,
+    _PRIOR_WIN_RATE,
+    Backtester,
+    BacktestResult,
+    OutcomeResolver,
+    PromotionGate,
+    ReplayEngine,
+    ReplayResult,
 )
 from core.types import (
-    DecisionTrace, FilteredSignal, MacroContext, MarketRegime,
-    RawSignal, Severity, SignalCategory, SizedSignal,
+    DecisionTrace,
+    FilteredSignal,
+    MacroContext,
+    MarketRegime,
+    RawSignal,
+    Severity,
+    SignalCategory,
+    SizedSignal,
 )
-
 
 # ── Fixtures ───────────────────────────────────────────────────────────────────
 

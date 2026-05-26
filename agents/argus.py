@@ -15,9 +15,9 @@ from typing import Callable, Optional
 
 import requests
 
-from core.types import AgentHealth
 from core.agent_knowledge import AgentKnowledgeBase
 from core.shadow_learning import OutcomeResolver
+from core.types import AgentHealth
 
 logger = logging.getLogger("argus")
 

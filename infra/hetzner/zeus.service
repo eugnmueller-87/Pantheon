@@ -1,0 +1,17 @@
+[Unit]
+Description=ZEUS Trading Orchestrator
+After=network.target
+
+[Service]
+Type=simple
+User=pantheon
+WorkingDirectory=/opt/pantheon
+EnvironmentFile=/opt/pantheon/.env
+ExecStart=/usr/local/bin/python3.11 main.py --port 8080
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

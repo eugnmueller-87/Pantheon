@@ -5,11 +5,12 @@ These tests protect real money. A failure here means ZEUS could
 trade a sanctioned entity or ESG-blocked company. All must pass.
 """
 
-import pytest
 from datetime import datetime, timezone
 
-from core.types import RawSignal, SignalCategory, Severity
+import pytest
+
 from agents.hades import HadesAgent
+from core.types import RawSignal, Severity, SignalCategory
 
 
 def _sig(text: str, tickers: list[str] = None, signal_id: str = "test") -> RawSignal:

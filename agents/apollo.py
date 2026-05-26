@@ -19,7 +19,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import re
 import time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
@@ -28,8 +27,8 @@ from typing import Optional
 
 import requests
 
-from core.types import AgentHealth
 from core.agent_knowledge import AgentKnowledgeBase
+from core.types import AgentHealth
 
 logger = logging.getLogger("apollo")
 
@@ -213,8 +212,8 @@ class ApolloAgent:
             return None
 
         try:
-            import quantstats as qs
             import pandas as pd
+            import quantstats as qs
         except ImportError:
             logger.info("[APOLLO] quantstats not installed — skipping report.")
             return None
@@ -258,7 +257,7 @@ class ApolloAgent:
         telegram_chat_id = os.getenv("TELEGRAM_CHAT_ID")
         if telegram_token and telegram_chat_id:
             try:
-                win_rate = (df["hit"] == True).mean() * 100
+                win_rate = df["hit"].mean() * 100
                 avg_pnl  = df["pnl_pct"].mean() * 100
                 msg = (
                     f"📊 Pantheon Daily Report\n"
