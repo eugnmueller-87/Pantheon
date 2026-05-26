@@ -328,7 +328,7 @@ class ApolloAgent:
         chunks: list[str] = []
 
         # 1. yfinance fundamentals — P/E, revenue, analyst target, sector
-        fundamentals = self._fetch_yfinance_fundamentals(ticker)
+        fundamentals = self._fetch_yfinance_fundamentals(ticker, supplier)
         if fundamentals:
             chunks.append(fundamentals)
 
@@ -356,12 +356,12 @@ class ApolloAgent:
 
         return combined
 
-    def _fetch_yfinance_fundamentals(self, ticker: str) -> str:
+    def _fetch_yfinance_fundamentals(self, ticker: str, supplier: str = "") -> str:
         """Pull key fundamentals from yfinance and format as a KB-ready paragraph."""
         try:
             import yfinance as yf
             info = yf.Ticker(ticker).info
-            if not info or info.get("regularMarketPrice") is None and info.get("currentPrice") is None:
+            if not info or (info.get("regularMarketPrice") is None and info.get("currentPrice") is None):
                 return ""
 
             price          = info.get("currentPrice") or info.get("regularMarketPrice", "N/A")
@@ -374,7 +374,7 @@ class ApolloAgent:
             revenue_growth = info.get("revenueGrowth")
             gross_margin   = info.get("grossMargins")
             analyst_target = info.get("targetMeanPrice")
-            recommendation = info.get("recommendationMean")  # 1=Strong Buy … 5=Sell
+            recommendation = info.get("recommendationMean")
             short_float    = info.get("shortPercentOfFloat")
             beta           = info.get("beta")
             earnings_date  = info.get("earningsTimestamp")
@@ -397,8 +397,9 @@ class ApolloAgent:
                 except Exception:
                     pass
 
+            label = f"{ticker} ({supplier})" if supplier else ticker
             return (
-                f"COMPANY INTELLIGENCE: {ticker} ({supplier})\n"
+                f"COMPANY INTELLIGENCE: {label}\n"
                 f"Sector: {sector} | Industry: {industry}\n"
                 f"Price: ${price} | Market Cap: {fmt_bn(market_cap)} | Beta: {fmt_num(beta)}\n"
                 f"Trailing P/E: {fmt_num(pe_ratio)} | Forward P/E: {fmt_num(fwd_pe)}\n"

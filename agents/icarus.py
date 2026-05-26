@@ -12,6 +12,8 @@ from datetime import datetime, timezone
 from typing import Optional
 
 import json
+import re
+import uuid
 from pathlib import Path
 
 import requests
@@ -76,9 +78,47 @@ _SUPPLIER_TICKER_MAP: dict[str, str] = {
 
 _APOLLO_TICKER_MAP_PATH = Path("data/ticker_map.json")
 
+# Division/product names that Hermes sends → parent company ticker
+# These are NOT in the default map because they're not company names
+_DIVISION_PARENT_MAP: dict[str, str] = {
+    "Google Cloud": "GOOGL", "Google Cloud Platform": "GOOGL",
+    "Amazon Web Services": "AMZN", "AWS": "AMZN",
+    "Microsoft Azure": "MSFT", "Azure": "MSFT",
+    "Microsoft 365": "MSFT", "Microsoft Teams": "MSFT",
+    "Apple Silicon": "AAPL", "Apple Services": "AAPL",
+    "Meta AI": "META", "WhatsApp": "META", "Instagram": "META",
+    "YouTube": "GOOGL", "DeepMind": "GOOGL",
+    "Waymo": "GOOGL",
+    "Alexa": "AMZN", "Amazon Prime": "AMZN",
+    "Tesla Energy": "TSLA", "Tesla Autopilot": "TSLA",
+    "Nvidia AI": "NVDA", "CUDA": "NVDA",
+    "Workday": "WDAY", "Workday HCM": "WDAY",
+    "Salesforce Einstein": "CRM",
+    "ServiceNow": "NOW",
+    "Palantir AIP": "PLTR",
+    "Snowflake Cortex": "SNOW",
+}
+
+_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
+
+
+def _sanitize_signal_id(raw_id: str) -> str:
+    """Ensure signal_id is a valid UUID — generate one if Hermes sends a truncated ID."""
+    if raw_id and _UUID_RE.match(raw_id.strip()):
+        return raw_id.strip()
+    # Deterministic UUID from the raw ID so same signal always gets same UUID
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, raw_id or str(uuid.uuid4())))
+
 
 def _resolve_ticker(supplier: str) -> str | None:
-    """Look up ticker: hardcoded map first, then Apollo's live ticker_map.json."""
+    """Look up ticker: division map → hardcoded map → Apollo's live ticker_map.json."""
+    # Division/product names first — they'd never match the company map
+    ticker = _DIVISION_PARENT_MAP.get(supplier)
+    if ticker:
+        return ticker
     ticker = _SUPPLIER_TICKER_MAP.get(supplier)
     if ticker:
         return ticker
@@ -117,7 +157,7 @@ def _map_signal(item: dict) -> Optional[RawSignal]:
         published_at = datetime.now(timezone.utc)
 
     return RawSignal(
-        signal_id         = item.get("id", ""),
+        signal_id         = _sanitize_signal_id(item.get("id", "")),
         source_url        = item.get("url", ""),
         headline          = item.get("title", ""),
         summary           = item.get("summary", ""),
