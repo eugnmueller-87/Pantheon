@@ -57,13 +57,21 @@
       "gridPos": { "x": 16, "y": 4, "w": 4, "h": 4 },
       "datasource": { "uid": "supabase-postgres" },
       "targets": [{
-        "rawSql": "SELECT total_equity AS value FROM portfolio_state ORDER BY refreshed_at DESC LIMIT 1",
+        "rawSql": "SELECT '€ ' || TO_CHAR(total_equity, 'FM999,999,990.00') AS value FROM portfolio_state ORDER BY refreshed_at DESC LIMIT 1",
         "format": "table"
       }],
       "fieldConfig": {
-        "defaults": { "unit": "currencyEUR", "color": { "mode": "thresholds" },
-          "thresholds": { "steps": [{ "color": "green", "value": 0 }] }
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "steps": [{ "color": "green", "value": null }] }
         }
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "textMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "text": { "valueSize": 24 }
       }
     },
 
