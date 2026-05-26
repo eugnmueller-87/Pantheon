@@ -128,22 +128,26 @@ class PythiaAgent:
 
     def _insert_supabase(self, sized: SizedSignal, result: TradeResult, key: str, hit, regime: str) -> None:
         import core.supabase_client as supa
+        from core.types import SignalCategory
+        side = result.side if result.side else (
+            "SELL" if sized.category == SignalCategory.SUPPLIER_DISRUPTION else "BUY"
+        )
         supa.insert_trade({
-            "order_id":    result.order_id or str(uuid.uuid4()),
-            "signal_id":   sized.signal_id or None,
-            "context_key": key,
-            "category":    sized.category.value,
-            "regime":      regime,
-            "vix_band":    self._vix_band(sized.macro.vix),
-            "confidence":  sized.confidence,
+            "order_id":     result.order_id or str(uuid.uuid4()),
+            "signal_id":    sized.signal_id or None,
+            "context_key":  key,
+            "category":     sized.category.value,
+            "regime":       regime,
+            "vix_band":     self._vix_band(sized.macro.vix),
+            "confidence":   sized.confidence,
             "position_pct": sized.position_size_pct,
-            "symbol":      result.symbol,
-            "side":        result.side or None,
-            "fill_price":  result.fill_price,
-            "pnl_pct":     result.pnl_pct,
-            "hit":         hit,
-            "paper_trading": True,
-            "recorded_at": datetime.now(timezone.utc).isoformat(),
+            "symbol":       result.symbol,
+            "side":         side,
+            "fill_price":   result.fill_price if result.fill_price and result.fill_price == result.fill_price else None,
+            "pnl_pct":      result.pnl_pct,
+            "hit":          hit,
+            "paper":        True,
+            "recorded_at":  datetime.now(timezone.utc).isoformat(),
         })
 
     def _lookup_stats(self, key: str) -> Optional[dict]:
