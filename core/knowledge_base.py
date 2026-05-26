@@ -277,6 +277,70 @@ class KnowledgeBase:
             logger.warning("[KB] query_outcomes failed: %s", exc)
             return {}
 
+    def query_ticker_history(self, ticker: str, n_results: int = 5) -> list[dict]:
+        """
+        Return Zeus's past approval decisions for a specific ticker as compact
+        fingerprints — enough for Zeus to pattern-match circumstances without
+        loading full trace text.
+
+        Each fingerprint: {ticker, side, signal_type, regime, vix_band,
+                           outcome, still_open, reasoning_summary, timestamp}
+        """
+        if self._decisions_col is None:
+            return []
+        try:
+            # Query by ticker symbol in the document text (ChromaDB doesn't support
+            # metadata filtering on dynamic fields, so we use semantic search)
+            count = self._decisions_col.count()
+            if count == 0:
+                return []
+            results = self._decisions_col.query(
+                query_texts=[f"approved trade {ticker}"],
+                n_results=min(n_results * 3, count),  # over-fetch, filter below
+                include=["documents", "metadatas"],
+            )
+            docs  = results.get("documents", [[]])[0]
+            metas = results.get("metadatas", [[]])[0]
+
+            fingerprints = []
+            for doc, meta in zip(docs, metas):
+                # Only include approved trades that mention this ticker
+                if ticker.upper() not in doc.upper():
+                    continue
+                if meta.get("approved") != "True":
+                    continue
+                pnl = meta.get("pnl_pct", 0.0)
+                if pnl is None or pnl == 0.0:
+                    outcome = "open/unknown"
+                elif pnl > 0:
+                    outcome = f"+{pnl*100:.1f}% win"
+                else:
+                    outcome = f"{pnl*100:.1f}% loss"
+
+                # Extract reasoning line from stored document
+                reasoning_line = ""
+                for line in doc.splitlines():
+                    if line.startswith("ZEUS reasoning:"):
+                        reasoning_line = line.replace("ZEUS reasoning:", "").strip()
+                        # Truncate to first sentence
+                        reasoning_line = reasoning_line.split(".")[0] + "." if reasoning_line else ""
+                        break
+
+                fingerprints.append({
+                    "ticker":    ticker,
+                    "regime":    meta.get("regime", "unknown"),
+                    "vix":       meta.get("vix", 0.0),
+                    "outcome":   outcome,
+                    "timestamp": meta.get("timestamp", "")[:16],
+                    "why":       reasoning_line,
+                })
+                if len(fingerprints) >= n_results:
+                    break
+            return fingerprints
+        except Exception as exc:
+            logger.warning("[KB] query_ticker_history failed for %s: %s", ticker, exc)
+            return []
+
     def get_recent_decisions(self, limit: int = 50) -> dict:
         """Return recent decision trace metadata for Apollo's self-improvement loop."""
         if self._decisions_col is None:

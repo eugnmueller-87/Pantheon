@@ -425,16 +425,23 @@ class ZeusOrchestrator:
         # giving Zeus real fundamentals + recent news before the LLM decides.
         ticker = sized.affected_tickers[0] if sized.affected_tickers else ""
         live_context = ""
+        ticker_history: list[dict] = []
         if ticker:
             try:
                 live_context = self.apollo.enrich_signal(ticker, sized.supplier)
             except Exception as exc:
                 logger.warning("[ZEUS] Signal enrichment failed for %s: %s", ticker, exc)
+            try:
+                ticker_history = self.kb.query_ticker_history(ticker, n_results=5)
+            except Exception as exc:
+                logger.warning("[ZEUS] Ticker history query failed for %s: %s", ticker, exc)
 
         # Stage 4 — ZEUS LLM reasoning + KB query (the final judge)
         approved, reasoning, override_size = self._zeus_evaluate(
-            sized, macro, trace, live_context=live_context,
+            sized, macro, trace,
+            live_context=live_context,
             intra_run_trades=list(self._run_approved_trades),
+            ticker_history=ticker_history,
         )
         trace.zeus_reasoning = reasoning
         trace.zeus_approved  = approved
@@ -513,6 +520,7 @@ class ZeusOrchestrator:
         trace: DecisionTrace,
         live_context: str = "",
         intra_run_trades: Optional[list] = None,
+        ticker_history: Optional[list] = None,
     ) -> tuple[bool, str, Optional[float]]:
         """
         Query the KB, build the Director prompt, call Claude, parse response.
@@ -528,6 +536,7 @@ class ZeusOrchestrator:
             live_context=live_context,
             intra_run_trades=intra_run_trades or [],
             self_critique=self_critique,
+            ticker_history=ticker_history or [],
         )
 
         try:
@@ -599,6 +608,7 @@ class ZeusOrchestrator:
         live_context: str = "",
         intra_run_trades: Optional[list] = None,
         self_critique: str = "",
+        ticker_history: Optional[list] = None,
     ) -> str:
         """Assemble the full Director governance prompt from signal + portfolio state."""
         open_positions  = self.argus.open_position_count()
@@ -629,6 +639,28 @@ YOUR KNOWN BIASES & SELF-CRITIQUE (from Apollo's analysis of your past decisions
 {self_critique}
 
 Apply this self-knowledge. If you are about to make a decision that matches a known failure pattern, flag it explicitly.
+"""
+
+        # Ticker decision history — compact fingerprints of past approvals
+        ticker_history_section = ""
+        if ticker_history:
+            lines = []
+            for h in ticker_history:
+                vix_val = h.get("vix", 0)
+                vix_str = f"{float(vix_val):.1f}" if vix_val else "?"
+                lines.append(
+                    f"  [{h.get('timestamp','')}] regime={h.get('regime','?')} VIX={vix_str} "
+                    f"→ outcome={h.get('outcome','?')} | why: {h.get('why','?')}"
+                )
+            ticker_history_section = f"""
+═══════════════════════════════════════════════
+YOUR DECISION HISTORY FOR THIS TICKER
+═══════════════════════════════════════════════
+{chr(10).join(lines)}
+
+Key question: Are the circumstances now the same as when you last acted on this ticker?
+Compare regime, VIX, and signal type. If outcome was a loss, has anything changed that
+invalidates the previous thesis? If position is still open, is this a double-down?
 """
 
         # Live company intelligence from Apollo
@@ -680,7 +712,7 @@ System seniority:    {seniority_level}
 
 Already approved this cycle:
 {trades_this_cycle}
-
+{ticker_history_section}
 ═══════════════════════════════════════════════
 KNOWLEDGE BASE & PRECEDENT
 ═══════════════════════════════════════════════
