@@ -70,10 +70,10 @@ def get_hit_rates(context_key: str) -> Optional[dict]:
             .table("trade_hit_rates")
             .select("hit_rate, total_trades, closed_trades, avg_pnl_pct")
             .eq("context_key", context_key)
-            .maybe_single()
             .execute()
         )
-        return res.data
+        rows = res.data if res and res.data else []
+        return rows[0] if rows else None
     except Exception as exc:
         logger.error("[SUPABASE] get_hit_rates failed: %s", exc)
         return None

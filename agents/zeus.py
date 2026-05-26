@@ -360,7 +360,7 @@ class ZeusOrchestrator:
     # ------------------------------------------------------------------
 
     def _process_signal(self, raw: RawSignal) -> PipelineRun:
-        run_id = str(uuid.uuid4())[:12]
+        run_id = str(uuid.uuid4())
         run    = PipelineRun(run_id=run_id, started_at=datetime.now(timezone.utc), raw_signal=raw)
         trace  = self._init_trace(run_id, raw)
 

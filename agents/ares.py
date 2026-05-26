@@ -115,7 +115,13 @@ class AresAgent:
 
     def _get_connection(self):
         if self._ib is None or not self._ib.isConnected():
+            import asyncio
             from ib_insync import IB
+            # ib_insync requires an event loop — create one if the thread has none
+            try:
+                asyncio.get_event_loop()
+            except RuntimeError:
+                asyncio.set_event_loop(asyncio.new_event_loop())
             self._ib = IB()
             self._ib.connect(self.host, self.port, clientId=1)
             logger.info("[ARES] Connected to IB %s:%d", self.host, self.port)
