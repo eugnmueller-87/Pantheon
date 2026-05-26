@@ -120,13 +120,13 @@ def upsert_portfolio_state(state: dict) -> None:
 
 
 def upsert_portfolio_positions(positions: list[dict]) -> None:
-    """Overwrite open positions. Called every Argus refresh."""
-    if not positions:
-        return
+    """Overwrite open positions. Delete all open rows then re-insert current snapshot."""
     try:
-        get_client().table("portfolio_positions").upsert(
-            positions, on_conflict="position_id"
-        ).execute()
+        client = get_client()
+        # Clear all currently-open positions (closed_at IS NULL)
+        client.table("portfolio_positions").delete().is_("closed_at", "null").execute()
+        if positions:
+            client.table("portfolio_positions").insert(positions).execute()
     except Exception as exc:
         logger.error("[SUPABASE] upsert_portfolio_positions failed: %s", exc)
 
