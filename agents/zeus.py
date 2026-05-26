@@ -546,11 +546,33 @@ class ZeusOrchestrator:
                 max_tokens=1500,
                 messages=[{"role": "user", "content": prompt}],
             )
+            self._record_token_usage(response.usage, sized.symbol if sized.affected_tickers else "unknown")
             return self._parse_llm_response(response.content[0].text.strip(), sized)
         except Exception as exc:
             logger.error("[ZEUS] LLM reasoning failed: %s — defaulting to Pattern score.", exc)
             fallback_approved = sized.confidence >= self.config.min_zeus_confidence
             return fallback_approved, f"LLM call failed ({exc}). Used Pattern confidence fallback.", None
+
+    def _record_token_usage(self, usage, symbol: str) -> None:
+        # Sonnet 4.6 pricing: $3/MTok input, $15/MTok output
+        input_tok  = getattr(usage, "input_tokens", 0) or 0
+        output_tok = getattr(usage, "output_tokens", 0) or 0
+        cost_usd   = round((input_tok * 3 + output_tok * 15) / 1_000_000, 6)
+        logger.info("[ZEUS] LLM tokens — in=%d out=%d cost=$%.4f symbol=%s",
+                    input_tok, output_tok, cost_usd, symbol)
+        try:
+            import core.supabase_client as supa
+            from datetime import datetime, timezone
+            supa.get_client().table("llm_usage").insert({
+                "model":       "claude-sonnet-4-6",
+                "symbol":      symbol,
+                "input_tokens":  input_tok,
+                "output_tokens": output_tok,
+                "cost_usd":    cost_usd,
+                "recorded_at": datetime.now(timezone.utc).isoformat(),
+            }).execute()
+        except Exception as exc:
+            logger.debug("[ZEUS] llm_usage insert skipped: %s", exc)
 
     def _load_self_critique(self) -> str:
         """Read Zeus's own skill file — accumulated self-critique from Apollo's improvement loop."""

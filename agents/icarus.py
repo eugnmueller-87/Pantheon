@@ -144,7 +144,7 @@ def _resolve_ticker(supplier: str) -> str | None:
     return None
 
 
-_MAX_SIGNAL_AGE_HOURS = 72  # drop signals older than 3 days — post-earnings window closed
+_MAX_SIGNAL_AGE_HOURS = 168  # 7 days — wider window while building Pythia trade history
 
 
 def _map_signal(item: dict) -> Optional[RawSignal]:
