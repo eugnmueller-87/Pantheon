@@ -11,6 +11,9 @@ import os
 from datetime import datetime, timezone
 from typing import Optional
 
+import json
+from pathlib import Path
+
 import requests
 
 from core.types import AgentHealth, RawSignal, SignalCategory, Severity
@@ -48,7 +51,49 @@ _SUPPLIER_TICKER_MAP: dict[str, str] = {
     "BASF": "BASFY", "Siemens": "SIEGY", "SAP": "SAP",
     "Deutsche Telekom": "DTEGY", "Volkswagen": "VWAGY",
     "BMW": "BMWYY", "Mercedes-Benz": "MBGYY",
+    # Extended common suppliers
+    "Cisco": "CSCO", "Cisco Systems": "CSCO",
+    "Meta": "META", "Meta Platforms": "META",
+    "Google": "GOOGL", "Alphabet": "GOOGL",
+    "Netflix": "NFLX", "AMD": "AMD",
+    "Broadcom": "AVGO", "Texas Instruments": "TXN",
+    "Micron": "MU", "Micron Technology": "MU",
+    "ASML": "ASML", "Applied Materials": "AMAT",
+    "Lam Research": "LRCX", "KLA": "KLAC",
+    "Taiwan Semiconductor": "TSM",
+    "JPMorgan": "JPM", "Goldman Sachs": "GS",
+    "Bank of America": "BAC", "Morgan Stanley": "MS",
+    "Salesforce": "CRM", "Oracle": "ORCL",
+    "IBM": "IBM", "Accenture": "ACN",
+    "Palantir": "PLTR", "Snowflake": "SNOW",
+    "Uber": "UBER", "Airbnb": "ABNB",
+    "Boeing": "BA", "Lockheed Martin": "LMT",
+    "ExxonMobil": "XOM", "Chevron": "CVX",
+    "Pfizer": "PFE", "Johnson & Johnson": "JNJ",
+    "Novo Nordisk": "NVO", "AstraZeneca": "AZN",
+    "ASML Holding": "ASML",
 }
+
+_APOLLO_TICKER_MAP_PATH = Path("data/ticker_map.json")
+
+
+def _resolve_ticker(supplier: str) -> str | None:
+    """Look up ticker: hardcoded map first, then Apollo's live ticker_map.json."""
+    ticker = _SUPPLIER_TICKER_MAP.get(supplier)
+    if ticker:
+        return ticker
+    try:
+        data = json.loads(_APOLLO_TICKER_MAP_PATH.read_text(encoding="utf-8"))
+        ticker = data.get(supplier)
+        if ticker:
+            return ticker
+        lower = supplier.lower()
+        for name, t in data.items():
+            if name.lower() == lower or name.lower() in lower or lower in name.lower():
+                return t
+    except Exception:
+        pass
+    return None
 
 
 def _map_signal(item: dict) -> Optional[RawSignal]:
@@ -63,7 +108,7 @@ def _map_signal(item: dict) -> Optional[RawSignal]:
         severity = Severity.CRITICAL
 
     supplier = item.get("supplier", "")
-    ticker   = _SUPPLIER_TICKER_MAP.get(supplier)
+    ticker   = _resolve_ticker(supplier)
     tickers  = [ticker] if ticker else []
 
     try:
