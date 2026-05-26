@@ -134,7 +134,9 @@ def upsert_portfolio_positions(positions: list[dict]) -> None:
 def insert_decision_trace(trace: dict) -> None:
     """Write a full pipeline audit trace (every signal, win or loss)."""
     try:
-        get_client().table("decision_traces").insert(trace).execute()
+        # Drop signal_id to avoid FK constraint — it's a correlation ID, not a true FK
+        row = {k: v for k, v in trace.items() if k != "signal_id"}
+        get_client().table("decision_traces").insert(row).execute()
     except Exception as exc:
         logger.error("[SUPABASE] insert_decision_trace failed: %s", exc)
 

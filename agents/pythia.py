@@ -138,7 +138,7 @@ class PythiaAgent:
             "confidence":  sized.confidence,
             "position_pct": sized.position_size_pct,
             "symbol":      result.symbol,
-            "side":        result.side,
+            "side":        result.side or None,
             "fill_price":  result.fill_price,
             "pnl_pct":     result.pnl_pct,
             "hit":         hit,
