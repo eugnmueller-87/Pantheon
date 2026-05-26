@@ -15,12 +15,13 @@
       "gridPos": { "x": 0, "y": 0, "w": 4, "h": 4 },
       "datasource": { "uid": "supabase-postgres" },
       "targets": [{
-        "rawSql": "SELECT total_equity AS value FROM portfolio_state ORDER BY refreshed_at DESC LIMIT 1",
+        "rawSql": "SELECT total_equity AS \"Portfolio Value\" FROM portfolio_state ORDER BY refreshed_at DESC LIMIT 1",
         "format": "table"
       }],
       "fieldConfig": {
         "defaults": {
           "unit": "currencyEUR",
+          "decimals": 2,
           "color": { "mode": "thresholds" },
           "thresholds": {
             "steps": [
@@ -28,14 +29,13 @@
               { "color": "yellow", "value": 95000 },
               { "color": "green",  "value": 100000 }
             ]
-          },
-          "decimals": 2
+          }
         }
       },
       "options": {
         "reduceOptions": { "calcs": ["lastNotNull"] },
         "textMode": "value",
-        "graphMode": "area",
+        "graphMode": "none",
         "justifyMode": "center",
         "colorMode": "background",
         "text": { "valueSize": 32 }
@@ -49,22 +49,22 @@
       "gridPos": { "x": 4, "y": 0, "w": 4, "h": 4 },
       "datasource": { "uid": "supabase-postgres" },
       "targets": [{
-        "rawSql": "SELECT total_equity - 100000 AS value FROM portfolio_state ORDER BY refreshed_at DESC LIMIT 1",
+        "rawSql": "SELECT total_equity - 100000 AS \"P&L vs Start\" FROM portfolio_state ORDER BY refreshed_at DESC LIMIT 1",
         "format": "table"
       }],
       "fieldConfig": {
         "defaults": {
           "unit": "currencyEUR",
+          "decimals": 2,
           "color": { "mode": "thresholds" },
           "thresholds": {
             "steps": [
-              { "color": "red",   "value": null },
-              { "color": "red",   "value": -5000 },
-              { "color": "yellow","value": 0 },
-              { "color": "green", "value": 1000 }
+              { "color": "red",    "value": null },
+              { "color": "red",    "value": -5000 },
+              { "color": "yellow", "value": 0 },
+              { "color": "green",  "value": 1000 }
             ]
-          },
-          "decimals": 2
+          }
         }
       },
       "options": {
@@ -84,7 +84,7 @@
       "gridPos": { "x": 8, "y": 0, "w": 3, "h": 4 },
       "datasource": { "uid": "supabase-postgres" },
       "targets": [{
-        "rawSql": "SELECT current_drawdown_pct * 100 AS value FROM portfolio_state ORDER BY refreshed_at DESC LIMIT 1",
+        "rawSql": "SELECT ROUND((current_drawdown_pct * 100)::numeric, 2) AS \"Drawdown\" FROM portfolio_state ORDER BY refreshed_at DESC LIMIT 1",
         "format": "table"
       }],
       "fieldConfig": {
@@ -104,7 +104,7 @@
       },
       "options": {
         "reduceOptions": { "calcs": ["lastNotNull"] },
-        "textMode": "value_and_name",
+        "textMode": "value",
         "graphMode": "none",
         "justifyMode": "center",
         "colorMode": "background",
@@ -119,7 +119,7 @@
       "gridPos": { "x": 11, "y": 0, "w": 3, "h": 4 },
       "datasource": { "uid": "supabase-postgres" },
       "targets": [{
-        "rawSql": "SELECT open_positions AS value FROM portfolio_state ORDER BY refreshed_at DESC LIMIT 1",
+        "rawSql": "SELECT open_positions AS \"Open Positions\" FROM portfolio_state ORDER BY refreshed_at DESC LIMIT 1",
         "format": "table"
       }],
       "fieldConfig": {
@@ -137,7 +137,7 @@
       },
       "options": {
         "reduceOptions": { "calcs": ["lastNotNull"] },
-        "textMode": "value_and_name",
+        "textMode": "value",
         "graphMode": "none",
         "justifyMode": "center",
         "colorMode": "background",
@@ -147,12 +147,12 @@
 
     {
       "id": 5,
-      "title": "Win Rate (closed trades)",
+      "title": "Win Rate",
       "type": "stat",
       "gridPos": { "x": 14, "y": 0, "w": 3, "h": 4 },
       "datasource": { "uid": "supabase-postgres" },
       "targets": [{
-        "rawSql": "SELECT ROUND(AVG(CASE WHEN hit THEN 1.0 ELSE 0.0 END) * 100, 1) AS value FROM trades WHERE hit IS NOT NULL",
+        "rawSql": "SELECT COALESCE(ROUND((AVG(CASE WHEN hit THEN 1.0 ELSE 0.0 END) * 100)::numeric, 1), 0) AS \"Win Rate\" FROM trades WHERE hit IS NOT NULL",
         "format": "table"
       }],
       "fieldConfig": {
@@ -171,7 +171,7 @@
       },
       "options": {
         "reduceOptions": { "calcs": ["lastNotNull"] },
-        "textMode": "value_and_name",
+        "textMode": "value",
         "graphMode": "none",
         "justifyMode": "center",
         "colorMode": "background",
@@ -186,7 +186,7 @@
       "gridPos": { "x": 17, "y": 0, "w": 3, "h": 4 },
       "datasource": { "uid": "supabase-postgres" },
       "targets": [{
-        "rawSql": "SELECT COUNT(*) AS value FROM trades",
+        "rawSql": "SELECT COUNT(*) AS \"Total Trades\" FROM trades",
         "format": "table"
       }],
       "fieldConfig": {
@@ -197,7 +197,7 @@
       },
       "options": {
         "reduceOptions": { "calcs": ["lastNotNull"] },
-        "textMode": "value_and_name",
+        "textMode": "value",
         "graphMode": "none",
         "justifyMode": "center",
         "colorMode": "none",
@@ -207,12 +207,12 @@
 
     {
       "id": 7,
-      "title": "Avg P&L per Trade",
+      "title": "Avg P&L / Trade",
       "type": "stat",
       "gridPos": { "x": 20, "y": 0, "w": 4, "h": 4 },
       "datasource": { "uid": "supabase-postgres" },
       "targets": [{
-        "rawSql": "SELECT ROUND(AVG(pnl_pct) * 100, 2) AS value FROM trades WHERE pnl_pct IS NOT NULL",
+        "rawSql": "SELECT COALESCE(ROUND((AVG(pnl_pct) * 100)::numeric, 2), 0) AS \"Avg P&L\" FROM trades WHERE pnl_pct IS NOT NULL",
         "format": "table"
       }],
       "fieldConfig": {
@@ -231,7 +231,7 @@
       },
       "options": {
         "reduceOptions": { "calcs": ["lastNotNull"] },
-        "textMode": "value_and_name",
+        "textMode": "value",
         "graphMode": "none",
         "justifyMode": "center",
         "colorMode": "background",
@@ -259,17 +259,15 @@
             "spanNulls": true
           }
         },
-        "overrides": [
-          {
-            "matcher": { "id": "byName", "options": "Peak" },
-            "properties": [
-              { "id": "custom.lineStyle", "value": { "dash": [4, 4], "fill": "dash" } },
-              { "id": "custom.lineWidth", "value": 1 },
-              { "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } },
-              { "id": "custom.fillOpacity", "value": 0 }
-            ]
-          }
-        ]
+        "overrides": [{
+          "matcher": { "id": "byName", "options": "Peak" },
+          "properties": [
+            { "id": "custom.lineStyle", "value": { "dash": [4, 4], "fill": "dash" } },
+            { "id": "custom.lineWidth", "value": 1 },
+            { "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } },
+            { "id": "custom.fillOpacity", "value": 0 }
+          ]
+        }]
       },
       "options": {
         "tooltip": { "mode": "multi" },
@@ -290,24 +288,11 @@
       "fieldConfig": {
         "defaults": {
           "unit": "percent",
-          "custom": {
-            "lineWidth": 2,
-            "fillOpacity": 20,
-            "gradientMode": "opacity"
-          },
-          "color": { "mode": "fixed", "fixedColor": "red" },
-          "thresholds": {
-            "steps": [
-              { "color": "green",  "value": 0 },
-              { "color": "yellow", "value": 3 },
-              { "color": "red",    "value": 8 }
-            ]
-          }
+          "custom": { "lineWidth": 2, "fillOpacity": 20, "gradientMode": "opacity" },
+          "color": { "mode": "fixed", "fixedColor": "red" }
         }
       },
-      "options": {
-        "tooltip": { "mode": "single" }
-      }
+      "options": { "tooltip": { "mode": "single" } }
     },
 
     {
@@ -317,7 +302,7 @@
       "gridPos": { "x": 0, "y": 12, "w": 14, "h": 10 },
       "datasource": { "uid": "supabase-postgres" },
       "targets": [{
-        "rawSql": "SELECT symbol AS \"Symbol\", COUNT(*) AS \"Trades\", COUNT(*) FILTER (WHERE hit IS NOT NULL) AS \"Closed\", COUNT(*) FILTER (WHERE hit = TRUE) AS \"Wins\", COUNT(*) FILTER (WHERE hit = FALSE) AS \"Losses\", ROUND(AVG(CASE WHEN hit THEN 1.0 ELSE 0.0 END) FILTER (WHERE hit IS NOT NULL) * 100, 1) AS \"Win %\", ROUND(AVG(pnl_pct) FILTER (WHERE pnl_pct IS NOT NULL) * 100, 2) AS \"Avg P&L %\", ROUND(SUM(pnl_pct) FILTER (WHERE pnl_pct IS NOT NULL) * 100, 2) AS \"Total P&L %\", ROUND(MAX(pnl_pct) FILTER (WHERE pnl_pct IS NOT NULL) * 100, 2) AS \"Best %\", ROUND(MIN(pnl_pct) FILTER (WHERE pnl_pct IS NOT NULL) * 100, 2) AS \"Worst %\" FROM trades GROUP BY symbol ORDER BY \"Total P&L %\" DESC NULLS LAST",
+        "rawSql": "SELECT symbol AS \"Symbol\", COUNT(*) AS \"Trades\", COUNT(*) FILTER (WHERE hit IS NOT NULL) AS \"Closed\", COUNT(*) FILTER (WHERE hit = TRUE) AS \"Wins\", COUNT(*) FILTER (WHERE hit = FALSE) AS \"Losses\", COALESCE(ROUND((AVG(CASE WHEN hit THEN 1.0 ELSE 0.0 END) FILTER (WHERE hit IS NOT NULL) * 100)::numeric, 1), 0) AS \"Win %\", COALESCE(ROUND((AVG(pnl_pct) FILTER (WHERE pnl_pct IS NOT NULL) * 100)::numeric, 2), 0) AS \"Avg P&L %\", COALESCE(ROUND((SUM(pnl_pct) FILTER (WHERE pnl_pct IS NOT NULL) * 100)::numeric, 2), 0) AS \"Total P&L %\", COALESCE(ROUND((MAX(pnl_pct) FILTER (WHERE pnl_pct IS NOT NULL) * 100)::numeric, 2), 0) AS \"Best %\", COALESCE(ROUND((MIN(pnl_pct) FILTER (WHERE pnl_pct IS NOT NULL) * 100)::numeric, 2), 0) AS \"Worst %\" FROM trades GROUP BY symbol ORDER BY \"Total P&L %\" DESC NULLS LAST",
         "format": "table"
       }],
       "fieldConfig": {
@@ -329,29 +314,20 @@
           },
           {
             "matcher": { "id": "byName", "options": "Avg P&L %" },
-            "properties": [{
-              "id": "custom.displayMode", "value": "color-text"
-            }, {
-              "id": "thresholds",
-              "value": { "steps": [{ "color": "red", "value": null }, { "color": "yellow", "value": 0 }, { "color": "green", "value": 0.5 }] }
+            "properties": [{ "id": "custom.displayMode", "value": "color-text" }, {
+              "id": "thresholds", "value": { "steps": [{ "color": "red", "value": null }, { "color": "yellow", "value": 0 }, { "color": "green", "value": 0.5 }] }
             }]
           },
           {
             "matcher": { "id": "byName", "options": "Total P&L %" },
-            "properties": [{
-              "id": "custom.displayMode", "value": "color-background"
-            }, {
-              "id": "thresholds",
-              "value": { "steps": [{ "color": "red", "value": null }, { "color": "yellow", "value": 0 }, { "color": "green", "value": 1 }] }
+            "properties": [{ "id": "custom.displayMode", "value": "color-background" }, {
+              "id": "thresholds", "value": { "steps": [{ "color": "red", "value": null }, { "color": "yellow", "value": 0 }, { "color": "green", "value": 1 }] }
             }]
           },
           {
             "matcher": { "id": "byName", "options": "Win %" },
-            "properties": [{
-              "id": "custom.displayMode", "value": "color-text"
-            }, {
-              "id": "thresholds",
-              "value": { "steps": [{ "color": "red", "value": null }, { "color": "yellow", "value": 45 }, { "color": "green", "value": 55 }] }
+            "properties": [{ "id": "custom.displayMode", "value": "color-text" }, {
+              "id": "thresholds", "value": { "steps": [{ "color": "red", "value": null }, { "color": "yellow", "value": 45 }, { "color": "green", "value": 55 }] }
             }]
           },
           {
@@ -365,12 +341,7 @@
         ]
       },
       "options": {
-        "sortBy": [{ "displayName": "Total P&L %", "desc": true }],
-        "footer": {
-          "show": true,
-          "reducer": ["sum"],
-          "fields": ["Total P&L %", "Trades", "Wins", "Losses"]
-        }
+        "sortBy": [{ "displayName": "Total P&L %", "desc": true }]
       }
     },
 
@@ -381,7 +352,7 @@
       "gridPos": { "x": 14, "y": 12, "w": 10, "h": 10 },
       "datasource": { "uid": "supabase-postgres" },
       "targets": [{
-        "rawSql": "SELECT symbol AS \"Symbol\", side::TEXT AS \"Side\", ROUND(qty::numeric, 4) AS \"Qty\", ROUND(avg_cost::numeric, 2) AS \"Entry\", ROUND(current_price::numeric, 2) AS \"Price\", ROUND(unrealized_pnl::numeric, 2) AS \"Unreal. P&L\", ROUND(unrealized_pnl_pct * 100, 2) AS \"Unreal. %\", ROUND(stop_loss::numeric, 2) AS \"SL\", ROUND(take_profit::numeric, 2) AS \"TP\", opened_at AS \"Opened\" FROM portfolio_positions WHERE closed_at IS NULL ORDER BY unrealized_pnl_pct DESC NULLS LAST",
+        "rawSql": "SELECT symbol AS \"Symbol\", side::TEXT AS \"Side\", ROUND(qty::numeric, 4) AS \"Qty\", ROUND(avg_cost::numeric, 2) AS \"Entry\", ROUND(current_price::numeric, 2) AS \"Price\", ROUND(unrealized_pnl::numeric, 2) AS \"Unreal P&L\", ROUND((unrealized_pnl_pct * 100)::numeric, 2) AS \"Unreal %\", ROUND(stop_loss::numeric, 2) AS \"SL\", ROUND(take_profit::numeric, 2) AS \"TP\" FROM portfolio_positions WHERE closed_at IS NULL ORDER BY unrealized_pnl_pct DESC NULLS LAST",
         "format": "table"
       }],
       "fieldConfig": {
@@ -393,9 +364,7 @@
           },
           {
             "matcher": { "id": "byName", "options": "Side" },
-            "properties": [{
-              "id": "custom.displayMode", "value": "color-background"
-            }, {
+            "properties": [{ "id": "custom.displayMode", "value": "color-background" }, {
               "id": "mappings", "value": [
                 { "type": "value", "options": { "LONG":  { "color": "green", "index": 0 } } },
                 { "type": "value", "options": { "SHORT": { "color": "red",   "index": 1 } } }
@@ -403,12 +372,9 @@
             }]
           },
           {
-            "matcher": { "id": "byName", "options": "Unreal. %" },
-            "properties": [{
-              "id": "custom.displayMode", "value": "color-background"
-            }, {
-              "id": "thresholds",
-              "value": { "steps": [{ "color": "red", "value": null }, { "color": "yellow", "value": 0 }, { "color": "green", "value": 1 }] }
+            "matcher": { "id": "byName", "options": "Unreal %" },
+            "properties": [{ "id": "custom.displayMode", "value": "color-background" }, {
+              "id": "thresholds", "value": { "steps": [{ "color": "red", "value": null }, { "color": "yellow", "value": 0 }, { "color": "green", "value": 1 }] }
             }]
           }
         ]
@@ -422,7 +388,7 @@
       "gridPos": { "x": 0, "y": 22, "w": 8, "h": 8 },
       "datasource": { "uid": "supabase-postgres" },
       "targets": [{
-        "rawSql": "SELECT COALESCE(killed_at_stage, 'executed') AS \"Stage\", COUNT(*) AS \"Count\", ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 1) AS \"Pct\" FROM decision_traces GROUP BY killed_at_stage ORDER BY COUNT(*) DESC",
+        "rawSql": "SELECT COALESCE(killed_at_stage, 'executed') AS \"Stage\", COUNT(*) AS \"Count\" FROM decision_traces GROUP BY killed_at_stage ORDER BY COUNT(*) DESC",
         "format": "table"
       }],
       "fieldConfig": {
@@ -435,10 +401,8 @@
         "xField": "Stage",
         "orientation": "horizontal",
         "barWidth": 0.7,
-        "groupWidth": 0.7,
         "tooltip": { "mode": "single" },
-        "legend": { "displayMode": "hidden" },
-        "text": { "valueSize": 12 }
+        "legend": { "displayMode": "hidden" }
       }
     },
 
@@ -449,14 +413,11 @@
       "gridPos": { "x": 8, "y": 22, "w": 8, "h": 8 },
       "datasource": { "uid": "supabase-postgres" },
       "targets": [{
-        "rawSql": "SELECT category::TEXT AS \"Category\", ROUND(AVG(CASE WHEN hit THEN 1.0 ELSE 0.0 END) FILTER (WHERE hit IS NOT NULL) * 100, 1) AS \"Win %\", COUNT(*) FILTER (WHERE hit IS NOT NULL) AS \"n\" FROM trades GROUP BY category HAVING COUNT(*) FILTER (WHERE hit IS NOT NULL) >= 1 ORDER BY \"Win %\" DESC NULLS LAST",
+        "rawSql": "SELECT category::TEXT AS \"Category\", COUNT(*) AS \"Trades\", COALESCE(ROUND((AVG(CASE WHEN hit THEN 1.0 ELSE 0.0 END) FILTER (WHERE hit IS NOT NULL) * 100)::numeric, 1), 0) AS \"Win %\" FROM trades GROUP BY category ORDER BY \"Win %\" DESC",
         "format": "table"
       }],
       "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "palette-classic" },
-          "custom": { "fillOpacity": 80 }
-        }
+        "defaults": { "custom": { "fillOpacity": 80 } }
       },
       "options": {
         "xField": "Category",
@@ -470,29 +431,20 @@
     {
       "id": 32,
       "title": "P&L Distribution (closed trades)",
-      "type": "histogram",
+      "type": "barchart",
       "gridPos": { "x": 16, "y": 22, "w": 8, "h": 8 },
       "datasource": { "uid": "supabase-postgres" },
       "targets": [{
-        "rawSql": "SELECT ROUND(pnl_pct * 100, 2) AS \"P&L %\" FROM trades WHERE pnl_pct IS NOT NULL ORDER BY pnl_pct ASC",
+        "rawSql": "SELECT bucket AS \"P&L Bucket\", COUNT(*) AS \"Count\" FROM ( SELECT CASE WHEN pnl_pct * 100 < -5  THEN '< -5%' WHEN pnl_pct * 100 < -3  THEN '-5 to -3%' WHEN pnl_pct * 100 < -1  THEN '-3 to -1%' WHEN pnl_pct * 100 < 0   THEN '-1 to 0%' WHEN pnl_pct * 100 < 1   THEN '0 to 1%' WHEN pnl_pct * 100 < 3   THEN '1 to 3%' WHEN pnl_pct * 100 < 5   THEN '3 to 5%' ELSE '> 5%' END AS bucket, CASE WHEN pnl_pct * 100 < -5  THEN 1 WHEN pnl_pct * 100 < -3  THEN 2 WHEN pnl_pct * 100 < -1  THEN 3 WHEN pnl_pct * 100 < 0   THEN 4 WHEN pnl_pct * 100 < 1   THEN 5 WHEN pnl_pct * 100 < 3   THEN 6 WHEN pnl_pct * 100 < 5   THEN 7 ELSE 8 END AS sort_order FROM trades WHERE pnl_pct IS NOT NULL ) t GROUP BY bucket, sort_order ORDER BY sort_order",
         "format": "table"
       }],
       "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": {
-            "steps": [
-              { "color": "red",   "value": null },
-              { "color": "green", "value": 0 }
-            ]
-          },
-          "custom": { "fillOpacity": 80, "lineWidth": 1 }
-        }
+        "defaults": { "color": { "mode": "palette-classic" }, "custom": { "fillOpacity": 80 } }
       },
       "options": {
-        "bucketSize": "auto",
-        "fillOpacity": 80,
-        "gradientMode": "none",
+        "xField": "P&L Bucket",
+        "orientation": "vertical",
+        "barWidth": 0.8,
         "tooltip": { "mode": "single" },
         "legend": { "displayMode": "hidden" }
       }
@@ -505,7 +457,7 @@
       "gridPos": { "x": 0, "y": 30, "w": 24, "h": 9 },
       "datasource": { "uid": "supabase-postgres" },
       "targets": [{
-        "rawSql": "SELECT recorded_at AS \"Time\", symbol AS \"Symbol\", side::TEXT AS \"Side\", category::TEXT AS \"Category\", ROUND(confidence * 100, 1) AS \"Conf %\", ROUND(position_pct * 100, 1) AS \"Size %\", ROUND(fill_price::numeric, 2) AS \"Fill\", ROUND(stop_loss::numeric, 2) AS \"SL\", ROUND(take_profit::numeric, 2) AS \"TP\", ROUND(pnl_pct * 100, 2) AS \"P&L %\", CASE WHEN hit IS NULL THEN 'OPEN' WHEN hit THEN 'WIN' ELSE 'LOSS' END AS \"Result\", paper_trading AS \"Paper\" FROM trades ORDER BY recorded_at DESC LIMIT 100",
+        "rawSql": "SELECT recorded_at AS \"Time\", symbol AS \"Symbol\", side::TEXT AS \"Side\", category::TEXT AS \"Category\", ROUND((confidence * 100)::numeric, 1) AS \"Conf %\", ROUND((position_pct * 100)::numeric, 1) AS \"Size %\", ROUND(fill_price::numeric, 2) AS \"Fill\", ROUND(stop_loss::numeric, 2) AS \"SL\", ROUND(take_profit::numeric, 2) AS \"TP\", COALESCE(ROUND((pnl_pct * 100)::numeric, 2), NULL) AS \"P&L %\", CASE WHEN hit IS NULL THEN 'OPEN' WHEN hit THEN 'WIN' ELSE 'LOSS' END AS \"Result\", CASE WHEN paper_trading THEN 'PAPER' ELSE 'LIVE' END AS \"Mode\" FROM trades ORDER BY recorded_at DESC LIMIT 100",
         "format": "table"
       }],
       "fieldConfig": {
@@ -521,9 +473,7 @@
           },
           {
             "matcher": { "id": "byName", "options": "Side" },
-            "properties": [{
-              "id": "custom.displayMode", "value": "color-background"
-            }, {
+            "properties": [{ "id": "custom.displayMode", "value": "color-background" }, {
               "id": "mappings", "value": [
                 { "type": "value", "options": { "BUY":  { "color": "green", "index": 0 } } },
                 { "type": "value", "options": { "SELL": { "color": "red",   "index": 1 } } }
@@ -532,9 +482,7 @@
           },
           {
             "matcher": { "id": "byName", "options": "Result" },
-            "properties": [{
-              "id": "custom.displayMode", "value": "color-background"
-            }, {
+            "properties": [{ "id": "custom.displayMode", "value": "color-background" }, {
               "id": "mappings", "value": [
                 { "type": "value", "options": { "WIN":  { "color": "green", "index": 0 } } },
                 { "type": "value", "options": { "LOSS": { "color": "red",   "index": 1 } } },
@@ -544,23 +492,18 @@
           },
           {
             "matcher": { "id": "byName", "options": "P&L %" },
-            "properties": [{
-              "id": "custom.displayMode", "value": "color-text"
-            }, {
-              "id": "thresholds",
-              "value": { "steps": [{ "color": "red", "value": null }, { "color": "yellow", "value": 0 }, { "color": "green", "value": 0.5 }] }
+            "properties": [{ "id": "custom.displayMode", "value": "color-text" }, {
+              "id": "thresholds", "value": { "steps": [{ "color": "red", "value": null }, { "color": "yellow", "value": 0 }, { "color": "green", "value": 0.5 }] }
             }]
           },
           {
-            "matcher": { "id": "byName", "options": "Paper" },
-            "properties": [{
-              "id": "custom.displayMode", "value": "color-background"
-            }, {
+            "matcher": { "id": "byName", "options": "Mode" },
+            "properties": [{ "id": "custom.displayMode", "value": "color-background" }, {
               "id": "mappings", "value": [
-                { "type": "value", "options": { "true":  { "color": "blue",  "text": "PAPER", "index": 0 } } },
-                { "type": "value", "options": { "false": { "color": "green", "text": "LIVE",  "index": 1 } } }
+                { "type": "value", "options": { "PAPER": { "color": "blue",  "index": 0 } } },
+                { "type": "value", "options": { "LIVE":  { "color": "green", "index": 1 } } }
               ]
-            }, { "id": "custom.width", "value": 65 }]
+            }, { "id": "custom.width", "value": 60 }]
           }
         ]
       },
@@ -576,7 +519,7 @@
       "gridPos": { "x": 0, "y": 39, "w": 14, "h": 8 },
       "datasource": { "uid": "supabase-postgres" },
       "targets": [{
-        "rawSql": "SELECT s.agent_name AS \"Agent\", s.level::TEXT AS \"Level\", s.level_int AS \"Score\", COALESCE(t.total_trades, 0) AS \"Trades\", COALESCE(t.closed_trades, 0) AS \"Closed\", ROUND(COALESCE(t.win_rate, 0) * 100, 1) AS \"Win %\", ROUND(COALESCE(t.avg_pnl_pct, 0) * 100, 2) AS \"Avg P&L %\", s.max_position_pct * 100 AS \"Max Pos %\", s.live_trading_allowed AS \"Live OK\", s.cleared AS \"Cleared\" FROM agent_seniority s LEFT JOIN ( SELECT category::TEXT, COUNT(*) AS total_trades, COUNT(*) FILTER (WHERE hit IS NOT NULL) AS closed_trades, AVG(CASE WHEN hit THEN 1.0 ELSE 0.0 END) FILTER (WHERE hit IS NOT NULL) AS win_rate, AVG(pnl_pct) FILTER (WHERE pnl_pct IS NOT NULL) AS avg_pnl_pct FROM trades GROUP BY category ) t ON LOWER(s.agent_name) = LOWER(t.category) ORDER BY s.level_int DESC, s.agent_name ASC",
+        "rawSql": "SELECT s.agent_name AS \"Agent\", s.level::TEXT AS \"Level\", s.level_int AS \"Score\", s.max_position_pct * 100 AS \"Max Pos %\", s.live_trading_allowed AS \"Live OK\", s.cleared AS \"Cleared\", s.evaluated_at AS \"Evaluated\" FROM agent_seniority s ORDER BY s.level_int DESC, s.agent_name ASC",
         "format": "table"
       }],
       "fieldConfig": {
@@ -584,44 +527,22 @@
         "overrides": [
           {
             "matcher": { "id": "byName", "options": "Agent" },
-            "properties": [{ "id": "custom.align", "value": "left" }, { "id": "custom.width", "value": 100 }]
+            "properties": [{ "id": "custom.align", "value": "left" }, { "id": "custom.width", "value": 110 }]
           },
           {
             "matcher": { "id": "byName", "options": "Level" },
-            "properties": [{
-              "id": "custom.displayMode", "value": "color-background"
-            }, {
+            "properties": [{ "id": "custom.displayMode", "value": "color-background" }, {
               "id": "mappings", "value": [
-                { "type": "value", "options": { "Director":          { "color": "purple",         "index": 0 } } },
-                { "type": "value", "options": { "Managing Director": { "color": "blue",            "index": 1 } } },
-                { "type": "value", "options": { "Principal":         { "color": "semi-dark-blue",  "index": 2 } } },
-                { "type": "value", "options": { "Senior":            { "color": "green",           "index": 3 } } }
+                { "type": "value", "options": { "Director":          { "color": "purple",        "index": 0 } } },
+                { "type": "value", "options": { "Managing Director": { "color": "blue",           "index": 1 } } },
+                { "type": "value", "options": { "Principal":         { "color": "semi-dark-blue", "index": 2 } } },
+                { "type": "value", "options": { "Senior":            { "color": "green",          "index": 3 } } }
               ]
             }, { "id": "custom.width", "value": 130 }]
           },
           {
-            "matcher": { "id": "byName", "options": "Win %" },
-            "properties": [{
-              "id": "custom.displayMode", "value": "color-text"
-            }, {
-              "id": "thresholds",
-              "value": { "steps": [{ "color": "red", "value": null }, { "color": "yellow", "value": 45 }, { "color": "green", "value": 55 }] }
-            }]
-          },
-          {
-            "matcher": { "id": "byName", "options": "Avg P&L %" },
-            "properties": [{
-              "id": "custom.displayMode", "value": "color-text"
-            }, {
-              "id": "thresholds",
-              "value": { "steps": [{ "color": "red", "value": null }, { "color": "yellow", "value": 0 }, { "color": "green", "value": 0.5 }] }
-            }]
-          },
-          {
             "matcher": { "id": "byName", "options": "Live OK" },
-            "properties": [{
-              "id": "custom.displayMode", "value": "color-background"
-            }, {
+            "properties": [{ "id": "custom.displayMode", "value": "color-background" }, {
               "id": "mappings", "value": [
                 { "type": "value", "options": { "true":  { "color": "green", "text": "YES", "index": 0 } } },
                 { "type": "value", "options": { "false": { "color": "red",   "text": "NO",  "index": 1 } } }
@@ -630,12 +551,10 @@
           },
           {
             "matcher": { "id": "byName", "options": "Cleared" },
-            "properties": [{
-              "id": "custom.displayMode", "value": "color-background"
-            }, {
+            "properties": [{ "id": "custom.displayMode", "value": "color-background" }, {
               "id": "mappings", "value": [
-                { "type": "value", "options": { "true":  { "color": "green", "text": "OK",  "index": 0 } } },
-                { "type": "value", "options": { "false": { "color": "red",   "text": "FAIL","index": 1 } } }
+                { "type": "value", "options": { "true":  { "color": "green", "text": "OK",   "index": 0 } } },
+                { "type": "value", "options": { "false": { "color": "red",   "text": "FAIL", "index": 1 } } }
               ]
             }]
           }
@@ -650,35 +569,20 @@
       "gridPos": { "x": 14, "y": 39, "w": 5, "h": 4 },
       "datasource": { "uid": "supabase-postgres" },
       "targets": [{
-        "rawSql": "SELECT system_level AS value FROM system_seniority",
+        "rawSql": "SELECT system_level AS \"System Level\" FROM system_seniority",
         "format": "table"
       }],
       "fieldConfig": {
         "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": {
-            "steps": [
-              { "color": "red",    "value": null },
-              { "color": "yellow", "value": 0 },
-              { "color": "green",  "value": 1 },
-              { "color": "blue",   "value": 2 },
-              { "color": "purple", "value": 3 }
-            ]
-          },
-          "mappings": [
-            { "type": "value", "options": { "Senior":            { "text": "SENIOR"            } } },
-            { "type": "value", "options": { "Principal":         { "text": "PRINCIPAL"         } } },
-            { "type": "value", "options": { "Managing Director": { "text": "MANAGING DIRECTOR" } } },
-            { "type": "value", "options": { "Director":          { "text": "DIRECTOR"          } } }
-          ]
+          "color": { "mode": "fixed", "fixedColor": "blue" }
         }
       },
       "options": {
         "reduceOptions": { "calcs": ["lastNotNull"] },
-        "textMode": "value_and_name",
+        "textMode": "value",
         "colorMode": "background",
         "justifyMode": "center",
-        "text": { "valueSize": 22 }
+        "text": { "valueSize": 20 }
       }
     },
 
@@ -689,7 +593,7 @@
       "gridPos": { "x": 19, "y": 39, "w": 5, "h": 4 },
       "datasource": { "uid": "supabase-postgres" },
       "targets": [{
-        "rawSql": "SELECT CASE WHEN live_trading_allowed THEN 'ENABLED' ELSE 'PAPER ONLY' END AS value FROM system_seniority",
+        "rawSql": "SELECT CASE WHEN live_trading_allowed THEN 'ENABLED' ELSE 'PAPER ONLY' END AS \"Live Trading\" FROM system_seniority",
         "format": "table"
       }],
       "fieldConfig": {
@@ -704,10 +608,10 @@
       },
       "options": {
         "reduceOptions": { "calcs": ["lastNotNull"] },
-        "textMode": "value_and_name",
+        "textMode": "value",
         "colorMode": "background",
         "justifyMode": "center",
-        "text": { "valueSize": 20 }
+        "text": { "valueSize": 18 }
       }
     },
 
@@ -718,7 +622,7 @@
       "gridPos": { "x": 14, "y": 43, "w": 5, "h": 4 },
       "datasource": { "uid": "supabase-postgres" },
       "targets": [{
-        "rawSql": "SELECT max_position_pct * 100 AS value FROM system_seniority",
+        "rawSql": "SELECT max_position_pct * 100 AS \"Max Pos %\" FROM system_seniority",
         "format": "table"
       }],
       "fieldConfig": {
@@ -766,9 +670,7 @@
         "defaults": { "custom": { "align": "left" } },
         "overrides": [{
           "matcher": { "id": "byName", "options": "Status" },
-          "properties": [{
-            "id": "custom.displayMode", "value": "color-background"
-          }, {
+          "properties": [{ "id": "custom.displayMode", "value": "color-background" }, {
             "id": "mappings", "value": [
               { "type": "value", "options": { "healthy":  { "color": "green",  "index": 0 } } },
               { "type": "value", "options": { "degraded": { "color": "yellow", "index": 1 } } },
@@ -786,32 +688,28 @@
       "gridPos": { "x": 10, "y": 47, "w": 8, "h": 7 },
       "datasource": { "uid": "supabase-postgres" },
       "targets": [{
-        "rawSql": "SELECT TO_CHAR(DATE_TRUNC('month', recorded_at), 'Mon YY') AS \"Month\", ROUND(AVG(CASE WHEN hit THEN 1.0 ELSE 0.0 END) FILTER (WHERE hit IS NOT NULL) * 100, 1) AS \"Win %\", ROUND(SUM(pnl_pct) FILTER (WHERE pnl_pct IS NOT NULL) * 100, 2) AS \"Total P&L %\" FROM trades GROUP BY DATE_TRUNC('month', recorded_at) ORDER BY DATE_TRUNC('month', recorded_at) ASC",
+        "rawSql": "SELECT TO_CHAR(DATE_TRUNC('month', recorded_at), 'Mon YY') AS \"Month\", COALESCE(ROUND((SUM(pnl_pct) FILTER (WHERE pnl_pct IS NOT NULL) * 100)::numeric, 2), 0) AS \"Total P&L %\", COUNT(*) AS \"Trades\" FROM trades GROUP BY DATE_TRUNC('month', recorded_at) ORDER BY DATE_TRUNC('month', recorded_at) ASC",
         "format": "table"
       }],
       "fieldConfig": {
         "defaults": { "custom": { "fillOpacity": 80 } },
-        "overrides": [
-          {
-            "matcher": { "id": "byName", "options": "Total P&L %" },
-            "properties": [{ "id": "custom.displayMode", "value": "color-background" }, {
-              "id": "thresholds",
-              "value": { "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 0 }] }
-            }]
-          }
-        ]
+        "overrides": [{
+          "matcher": { "id": "byName", "options": "Total P&L %" },
+          "properties": [{ "id": "custom.displayMode", "value": "color-background" }, {
+            "id": "thresholds", "value": { "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 0 }] }
+          }]
+        }]
       },
       "options": {
         "xField": "Month",
         "barWidth": 0.7,
-        "groupWidth": 0.7,
         "tooltip": { "mode": "multi" }
       }
     },
 
     {
       "id": 62,
-      "title": "Pipeline — Last 24h Activity",
+      "title": "Pipeline Activity (24h)",
       "type": "timeseries",
       "gridPos": { "x": 18, "y": 47, "w": 6, "h": 7 },
       "datasource": { "uid": "supabase-postgres" },
@@ -820,9 +718,7 @@
         "format": "time_series"
       }],
       "fieldConfig": {
-        "defaults": {
-          "custom": { "lineWidth": 2, "fillOpacity": 15, "gradientMode": "opacity" }
-        },
+        "defaults": { "custom": { "lineWidth": 2, "fillOpacity": 15 } },
         "overrides": [
           { "matcher": { "id": "byName", "options": "Approved" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }] },
           { "matcher": { "id": "byName", "options": "Rejected" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }] }
