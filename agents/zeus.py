@@ -138,7 +138,6 @@ class ZeusOrchestrator:
         self.argus     = ArgusAgent(
             max_drawdown_pct=self.config.max_portfolio_drawdown_pct,
             on_kill=self._emergency_halt,
-            alert_fn=self._send_alert,
             milestone_manager=self.milestone,
             default_account_equity=self.config.default_account_equity,
             ib_host=os.getenv("IB_HOST", "ibgateway"),
