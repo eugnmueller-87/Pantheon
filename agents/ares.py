@@ -109,14 +109,14 @@ class AresAgent:
 
     def _get_account_value(self, ib) -> float:
         for av in ib.accountValues():
-            if av.tag == "NetLiquidation" and av.currency == "BASE":
+            if av.tag == "NetLiquidationByCurrency" and av.currency == "BASE":
                 return float(av.value)
         return self.default_account_equity
 
     def _get_connection(self):
         import asyncio
-        from ib_insync import IB
         asyncio.set_event_loop(asyncio.new_event_loop())
+        from ib_insync import IB  # eventkit imports event loop at module level
         connected = False
         if self._ib is not None:
             try:
