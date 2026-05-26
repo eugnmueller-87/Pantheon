@@ -16,7 +16,7 @@ _DEFAULTS: dict[str, Any] = {
     "paper_trading": True,
     "mock_execution": True,
     "max_drawdown_pct": 0.08,
-    "max_open_positions": 10,
+    "max_open_positions": 3,        # €4k account — max 3 concurrent positions
     "poll_interval_seconds": 900,
     "webhook_port": 8080,
     "hermes_base_url": "https://hermes-agent-production-114e.up.railway.app",
@@ -25,7 +25,7 @@ _DEFAULTS: dict[str, Any] = {
     "ib_host": "127.0.0.1",
     "ib_paper_port": 7497,
     "ib_live_port": 7496,
-    "default_account_equity": 100_000.0,   # fallback when IB unavailable
+    "default_account_equity": 4_000.0,     # realistic starting capital — paper trades real-world constraints
     # Risk parameters — Ares bracket order
     "stop_loss_pct": 0.03,        # 3% stop
     "take_profit_pct": 0.06,      # 6% target (2:1 R/R)
