@@ -116,17 +116,15 @@ class AresAgent:
     def _get_connection(self):
         import asyncio
         asyncio.set_event_loop(asyncio.new_event_loop())
-        from ib_insync import IB  # eventkit imports event loop at module level
-        connected = False
+        from ib_insync import IB  # eventkit reads event loop at import time
         if self._ib is not None:
             try:
-                connected = self._ib.isConnected()
+                self._ib.disconnect()
             except Exception:
-                connected = False
-        if not connected:
-            self._ib = IB()
-            self._ib.connect(self.host, self.port, clientId=1)
-            logger.info("[ARES] Connected to IB %s:%d", self.host, self.port)
+                pass
+        self._ib = IB()
+        self._ib.connect(self.host, self.port, clientId=1)
+        logger.info("[ARES] Connected to IB %s:%d", self.host, self.port)
         return self._ib
 
     @staticmethod
