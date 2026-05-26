@@ -26,6 +26,8 @@ services:
       - TWS_PASSWORD=${IB_PASSWORD}
       - TRADING_MODE=paper
       - EXISTING_SESSION_DETECTED_ACTION=primary
+      - OVERRIDE_TWSAPIPORT=4002
+      - ACCEPT_INCOMING_CONNECTION=accept
       - TZ=Europe/Berlin
     ports:
       - "4002:4002"
@@ -180,9 +182,12 @@ services:
       - /etc/letsencrypt:/etc/letsencrypt:ro
       - /var/www/certbot:/var/www/certbot:ro
     depends_on:
-      - zeus
-      - dashboard
-      - grafana
+      zeus:
+        condition: service_healthy
+      dashboard:
+        condition: service_healthy
+      grafana:
+        condition: service_healthy
     networks:
       - pantheon
 
