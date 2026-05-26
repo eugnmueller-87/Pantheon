@@ -175,6 +175,21 @@ def _resolve_ticker(supplier: str) -> str | None:
 
 _MAX_SIGNAL_AGE_HOURS = 168  # 7 days — wider window while building Pythia trade history
 
+# Static regulatory filings — never actionable, always waste an LLM call
+_FILING_KEYWORDS = (
+    "10-q", "10-k", "10q", "10k",
+    "annual report", "annual filing",
+    "quarterly report", "quarterly filing",
+    "proxy statement", "def 14a",
+    "form 4",   # insider ownership forms (not the same as insider *trades*)
+    "8-k/a",    # amended filing — stale by definition
+)
+
+
+def _is_static_filing(title: str) -> bool:
+    t = title.lower()
+    return any(kw in t for kw in _FILING_KEYWORDS)
+
 
 def _map_signal(item: dict) -> Optional[RawSignal]:
     signal_type = item.get("signal_type", "OTHER")
@@ -201,6 +216,11 @@ def _map_signal(item: dict) -> Optional[RawSignal]:
     age_hours = (datetime.now(timezone.utc) - published_at).total_seconds() / 3600
     if age_hours > _MAX_SIGNAL_AGE_HOURS:
         logger.info("[ICARUS] Dropping stale signal (%dh old): %s", int(age_hours), item.get("title", "")[:60])
+        return None
+
+    title = item.get("title", "")
+    if _is_static_filing(title):
+        logger.info("[ICARUS] Dropping static filing: %s", title[:80])
         return None
 
     return RawSignal(
