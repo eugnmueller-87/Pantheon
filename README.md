@@ -22,13 +22,27 @@
 
 ---
 
+## Live Dashboard
+
+**[→ moremanamoreproblems.de/grafana](https://moremanamoreproblems.de/grafana/d/pantheon-overview)**
+
+Real-time Grafana dashboard auto-refreshing every 30 seconds. Panels include:
+
+- **Portfolio** — equity curve, drawdown %, P&L vs start, open positions
+- **Trade stats** — P&L by symbol (wins/losses/avg/best/worst), recent trades feed
+- **Pipeline** — where signals die, win rate by category, P&L distribution, 24h activity
+- **Seniority** — per-agent level, system level, live trading gate, promotion history
+- **Agent health** — live status of all 8 agents with last-check timestamps
+
+---
+
 ## Live URLs
 
 | Service | URL |
 |---|---|
 | API health | `https://moremanamoreproblems.de/api/health` |
 | Agent status | `https://moremanamoreproblems.de/api/agents` |
-| Grafana dashboard | `https://moremanamoreproblems.de/grafana/` |
+| Grafana dashboard | `https://moremanamoreproblems.de/grafana/d/pantheon-overview` |
 | WebSocket feed | `wss://moremanamoreproblems.de/ws` |
 | React dashboard (CDN) | Cloudflare Pages (see GitHub secrets) |
 
