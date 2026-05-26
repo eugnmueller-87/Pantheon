@@ -24,9 +24,7 @@
 
 ## Live Dashboard
 
-**[→ moremanamoreproblems.de/grafana](https://moremanamoreproblems.de/grafana/d/pantheon-overview)**
-
-https://github.com/eugnmueller-87/Pantheon/raw/main/screenshots/Aufzeichnung%202026-05-26%20160647.mp4
+![Pantheon OS Live Dashboard](screenshots/dashboard-demo.gif)
 
 Real-time Grafana dashboard auto-refreshing every 30 seconds. Panels include:
 
