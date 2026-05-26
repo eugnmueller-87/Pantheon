@@ -135,6 +135,12 @@ class _UpstashRedis:
     def expire(self, key: str, seconds: int) -> int:
         return int(self._cmd("EXPIRE", key, seconds))
 
+    def incr(self, key: str) -> int:
+        return int(self._cmd("INCR", key))
+
+    def get(self, key: str) -> str | None:
+        return self._cmd("GET", key)
+
 
 def _sanitize_signal_id(raw_id: str) -> str:
     """Ensure signal_id is a valid UUID — generate one if Hermes sends a truncated ID."""
@@ -215,6 +221,81 @@ def _map_signal(item: dict) -> Optional[RawSignal]:
 _SEEN_REDIS_KEY = "icarus:seen_signals"
 _SEEN_TTL_SECONDS = 7 * 24 * 3600  # matches _MAX_SIGNAL_AGE_HOURS
 
+# Quality learning — Redis keys
+# icarus:quality:{pattern}:seen   — how many times Icarus sent this pattern
+# icarus:quality:{pattern}:approved — how many times Zeus approved it
+_QUALITY_MIN_SAMPLES = 10    # need at least this many before filtering
+_QUALITY_MAX_REJECT  = 0.85  # suppress pattern if rejection rate >= 85%
+
+
+def _quality_pattern(sig: "RawSignal") -> str:
+    """Stable key identifying a signal pattern: hermes_type + first keyword of headline."""
+    signal_type = sig.hermes_signal_type or "OTHER"
+    # First meaningful word from headline (skip articles/conjunctions)
+    skip = {"the", "a", "an", "in", "of", "for", "on", "and", "or", "is"}
+    keyword = next(
+        (w.lower() for w in sig.headline.split() if w.lower() not in skip and len(w) > 3),
+        "unknown",
+    )
+    return f"{signal_type}:{keyword}"
+
+
+class _SignalQualityFilter:
+    """
+    Learns which signal patterns Zeus consistently rejects and suppresses them
+    before they burn an LLM call. Stats persist in Redis (same Upstash instance).
+
+    Pattern key = hermes_signal_type + first meaningful headline keyword.
+    A pattern is suppressed once it has >=10 samples with >=85% rejection rate.
+    """
+
+    def __init__(self, redis: _UpstashRedis | None):
+        self._redis = redis
+
+    def should_suppress(self, sig: "RawSignal") -> bool:
+        """Return True if this pattern is reliably rejected by Zeus."""
+        if self._redis is None:
+            return False
+        pattern = _quality_pattern(sig)
+        try:
+            seen_raw     = self._redis.get(f"icarus:quality:{pattern}:seen")
+            approved_raw = self._redis.get(f"icarus:quality:{pattern}:approved")
+            seen     = int(seen_raw)     if seen_raw     else 0
+            approved = int(approved_raw) if approved_raw else 0
+            if seen < _QUALITY_MIN_SAMPLES:
+                return False
+            rejection_rate = (seen - approved) / seen
+            if rejection_rate >= _QUALITY_MAX_REJECT:
+                logger.info(
+                    "[ICARUS] Suppressing low-quality pattern '%s' "
+                    "(rejection rate %.0f%% over %d samples)",
+                    pattern, rejection_rate * 100, seen,
+                )
+                return True
+        except Exception:
+            pass
+        return False
+
+    def record_seen(self, sig: "RawSignal") -> None:
+        if self._redis is None:
+            return
+        pattern = _quality_pattern(sig)
+        try:
+            self._redis.incr(f"icarus:quality:{pattern}:seen")
+            self._redis.incr("icarus:quality:totals:seen")
+        except Exception:
+            pass
+
+    def record_approved(self, sig: "RawSignal") -> None:
+        if self._redis is None:
+            return
+        pattern = _quality_pattern(sig)
+        try:
+            self._redis.incr(f"icarus:quality:{pattern}:approved")
+            self._redis.incr("icarus:quality:totals:approved")
+        except Exception:
+            pass
+
 
 class IcarusAgent:
     def __init__(
@@ -227,6 +308,7 @@ class IcarusAgent:
         self._base_url = base_url.rstrip("/")
         self._seen: set[str] = set()  # in-memory fallback
         self._redis = self._init_redis()
+        self._quality = _SignalQualityFilter(self._redis)
         self.kb = AgentKnowledgeBase("icarus")
         # Optional callable(supplier_name) -> ticker | None injected by Zeus
         # Falls back to the static _resolve_ticker when not provided
@@ -328,6 +410,9 @@ class IcarusAgent:
             sig = _map_signal(item)
             if sig is None:
                 continue
+            if self._quality.should_suppress(sig):
+                continue
+            self._quality.record_seen(sig)
             if not sig.affected_tickers and sig.supplier:
                 pre.append((sig, sig.supplier))
             else:
@@ -351,3 +436,25 @@ class IcarusAgent:
                         logger.warning("[ICARUS] Ticker lookup failed for '%s': %s", sig.supplier, exc)
 
         return [sig for sig, _ in pre]
+
+    def record_signal_outcome(self, sig: RawSignal, approved: bool) -> None:
+        """Called by Zeus after each decision so Icarus can learn which patterns get approved."""
+        if approved:
+            self._quality.record_approved(sig)
+
+    def approval_rate(self) -> float | None:
+        """Current approval rate across all patterns — used by seniority evaluation."""
+        if self._redis is None:
+            return None
+        try:
+            # Sum across all tracked patterns via a scan-like approach:
+            # we stored per-pattern keys, so query the overall counters
+            total_seen     = self._redis.get("icarus:quality:totals:seen")
+            total_approved = self._redis.get("icarus:quality:totals:approved")
+            seen     = int(total_seen)     if total_seen     else 0
+            approved = int(total_approved) if total_approved else 0
+            if seen == 0:
+                return None
+            return approved / seen
+        except Exception:
+            return None

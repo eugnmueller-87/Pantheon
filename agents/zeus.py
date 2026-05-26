@@ -465,6 +465,9 @@ class ZeusOrchestrator:
             trace.zeus_override_reason = f"ZEUS resized from {sized.position_size_pct:.3f} to {override_size:.3f}"
             sized.position_size_pct    = override_size
 
+        # Teach Icarus — feedback loop so it learns which patterns get approved
+        self.icarus.record_signal_outcome(raw, approved)
+
         if not approved:
             trace.killed_at_stage = "zeus"
             trace.kill_reason     = "ZEUS LLM reasoning rejected trade"

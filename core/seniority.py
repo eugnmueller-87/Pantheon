@@ -514,12 +514,19 @@ class SeniorityEvaluator:
             score.failed("deduplication_logic_active", "" if dedup_active else "dedup missing")
             return score
 
-        # SENIOR → PRINCIPAL: 200+ signals classified across all categories
-        if signals_seen >= 200:
+        # SENIOR → PRINCIPAL: 200+ signals seen AND ≥15% approved by Zeus
+        approval_rate = self._icarus_approval_rate()
+        min_rate = 0.15
+        if signals_seen >= 200 and approval_rate is not None and approval_rate >= min_rate:
             score.level = Level.PRINCIPAL
             score.passed("200_signals_classified")
-        else:
+            score.passed(f"approval_rate_{int(approval_rate*100)}pct")
+        elif signals_seen < 200:
             score.failed("200_signals_classified", f"seen {signals_seen}/200")
+            return score
+        else:
+            rate_str = f"{approval_rate*100:.1f}%" if approval_rate is not None else "unknown"
+            score.failed("approval_rate_15pct", f"rate {rate_str} < 15% — Icarus sending too much noise")
             return score
 
         # PRINCIPAL → MANAGING_DIR: 200+ ticker coverage (Apollo-expanded)
@@ -768,6 +775,26 @@ class SeniorityEvaluator:
             return self._get_kb()._decisions_col.count()
         except Exception:
             return 0
+
+    def _icarus_approval_rate(self) -> float | None:
+        """Query Icarus quality totals from Redis."""
+        try:
+            url   = os.getenv("UPSTASH_REDIS_REST_URL", "")
+            token = os.getenv("UPSTASH_REDIS_REST_TOKEN", "")
+            if not url or not token:
+                return None
+            import httpx
+            headers = {"Authorization": f"Bearer {token}"}
+            def _get(key: str):
+                r = httpx.get(f"{url}/get/{key}", headers=headers, timeout=3)
+                return r.json().get("result")
+            seen_raw     = _get("icarus:quality:totals:seen")
+            approved_raw = _get("icarus:quality:totals:approved")
+            seen     = int(seen_raw)     if seen_raw     else 0
+            approved = int(approved_raw) if approved_raw else 0
+            return (approved / seen) if seen > 0 else None
+        except Exception:
+            return None
 
     def _icarus_dedup_active(self) -> bool:
         path = Path("agents/icarus.py")
