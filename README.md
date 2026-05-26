@@ -1,7 +1,7 @@
 # Pantheon OS — Autonomous Trading Orchestrator
 
 ![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=flat&logo=python&logoColor=white)
-![Tests](https://img.shields.io/badge/Tests-294%20passing-brightgreen?style=flat)
+![Tests](https://img.shields.io/badge/Tests-255%20passing-brightgreen?style=flat)
 ![CI](https://img.shields.io/badge/CI%2FCD-GitHub%20Actions-2088FF?style=flat&logo=githubactions&logoColor=white)
 ![Status](https://img.shields.io/badge/Status-Paper%20Trading-orange?style=flat)
 ![Broker](https://img.shields.io/badge/Broker-Interactive%20Brokers-red?style=flat)
@@ -93,7 +93,7 @@ Real-time Grafana dashboard auto-refreshing every 30 seconds. Panels include:
 
 | # | Agent | Mythology | Role |
 |---|---|---|---|
-| 1 | **Icarus** | Flies closest to the sun — first to see market signals | Monitors the live Hermes API (590+ suppliers). Classifies events by category and severity. Deduplicates across poll cycles. |
+| 1 | **Icarus** | Flies closest to the sun — first to see market signals | Monitors the live Hermes API (590+ suppliers). Classifies events by category and severity. Deduplicates across poll cycles. Learns which signal patterns Zeus consistently rejects and suppresses them before they burn an LLM call. Seniority gates on ≥15% Zeus approval rate — not just volume. |
 | 2 | **Hades** | Lord of the underworld — judges who passes | Compliance firewall. OFAC, EU sanctions (BaFin/Reg 833/2014), ESG sector flags, LkSG violations → hard kill or severity downgrade. Full audit trail. |
 | 3 | **Artemis** | Goddess of the hunt — tracks conditions, picks the moment | Fetches VIX, S&P 500 1-month return, and 6 sector ETFs. Classifies market regime (bull/bear/sideways). Suppresses signals that conflict with macro environment. 15-min cache. |
 | 4 | **Pythia** | Oracle of Delphi — reads patterns, predicts outcomes | Learning agent. Every signal → outcome in Supabase. Derives position size from historical hit rates per `{category}×{regime}×{VIX band}`. Kelly-inspired sizing (capped at 5%). |
@@ -116,7 +116,7 @@ Real-time Grafana dashboard auto-refreshing every 30 seconds. Panels include:
 | **Cache** | Upstash Redis — shared with SpendLens via RedisBridge |
 | **CDN** | Cloudflare Pages — React dashboard at `pantheon-dashboard-ban.pages.dev` |
 | **Monitoring** | Grafana — live trading dashboard, reads Supabase directly |
-| **CI/CD** | GitHub Actions: test (234 tests) → build (GHCR) → deploy (SSH) → Cloudflare Pages |
+| **CI/CD** | GitHub Actions: test (255 tests) → build (GHCR) → deploy (SSH) → Cloudflare Pages |
 
 ---
 
@@ -197,7 +197,7 @@ IBKR_CLIENT_ID=1
 
 ```bash
 pytest tests/ -q --timeout=30
-# 234 tests, all green
+# 255 tests, all green (1 pre-existing shadow_learning skip)
 ```
 
 ### 4. Bootstrap historical data (run once before paper trading)
@@ -315,7 +315,7 @@ ZEUS/
 ├── knowledge/
 │   ├── agents/                  # Per-agent Senior IC skills files
 │   └── *.md                     # Trading fundamentals, macro playbooks
-├── tests/                       # 234 tests — full pipeline coverage
+├── tests/                       # 255 tests — full pipeline coverage
 └── .github/workflows/deploy.yml # CI/CD pipeline
 ```
 
