@@ -56,6 +56,10 @@ def build_zeus() -> ZeusOrchestrator:
 # n8n Webhook Server
 # ---------------------------------------------------------------------------
 
+# Single-process design: _zeus is module-level state shared between the HTTP
+# handler threads and the auto-run daemon. This is intentional — the server
+# runs as one process with workers=1. Do not scale to multiple workers without
+# replacing this with a proper job queue (e.g. Celery + Redis).
 _zeus: ZeusOrchestrator | None = None
 _run_lock = threading.Lock()  # prevents concurrent run_once() calls
 
@@ -212,11 +216,11 @@ def _auto_run_loop(interval_seconds: int):
                     try:
                         logger.info("[MAIN] Auto-run triggered")
                         runs = _zeus.run_once()
+                        logger.info("[MAIN] Auto-run complete — %d signal(s) processed", len(runs))
                     finally:
                         _run_lock.release()
                 else:
                     logger.info("[MAIN] Auto-run skipped — pipeline already running")
-                logger.info("[MAIN] Auto-run complete — %d signal(s) processed", len(runs))
         except Exception as exc:
             logger.exception("[MAIN] Auto-run error: %s", exc)
         time.sleep(interval_seconds)
