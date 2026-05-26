@@ -311,6 +311,133 @@ class ApolloAgent:
         return self._load_ticker_map()
 
     # ------------------------------------------------------------------
+    # Per-signal enrichment — called by Zeus before LLM decision
+    # ------------------------------------------------------------------
+
+    def enrich_signal(self, ticker: str, supplier: str) -> str:
+        """
+        Fetch live company intelligence for a specific ticker and store it
+        in the shared KB so Zeus's LLM query finds real company context.
+
+        Returns a summary string Zeus can embed directly in the prompt
+        even if KB storage fails.
+        """
+        if self._zeus_kb is None:
+            return ""
+
+        chunks: list[str] = []
+
+        # 1. yfinance fundamentals — P/E, revenue, analyst target, sector
+        fundamentals = self._fetch_yfinance_fundamentals(ticker)
+        if fundamentals:
+            chunks.append(fundamentals)
+
+        # 2. Recent Hermes news for this company
+        hermes_context = self._fetch_hermes_company_context(supplier)
+        if hermes_context:
+            chunks.append(hermes_context)
+
+        if not chunks:
+            return ""
+
+        combined = "\n\n".join(chunks)
+        doc_id   = f"signal_enrichment_{ticker}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M')}"
+
+        try:
+            self._zeus_kb.add_literature(
+                title  = f"Signal Enrichment: {ticker} ({supplier})",
+                text   = combined,
+                source = f"signal_enrichment:{ticker}",
+                doc_id = doc_id,
+            )
+            logger.info("[APOLLO] Enriched KB for %s (%s) — %d chars", ticker, supplier, len(combined))
+        except Exception as exc:
+            logger.warning("[APOLLO] KB storage failed for %s: %s", ticker, exc)
+
+        return combined
+
+    def _fetch_yfinance_fundamentals(self, ticker: str) -> str:
+        """Pull key fundamentals from yfinance and format as a KB-ready paragraph."""
+        try:
+            import yfinance as yf
+            info = yf.Ticker(ticker).info
+            if not info or info.get("regularMarketPrice") is None and info.get("currentPrice") is None:
+                return ""
+
+            price          = info.get("currentPrice") or info.get("regularMarketPrice", "N/A")
+            sector         = info.get("sector", "Unknown")
+            industry       = info.get("industry", "Unknown")
+            market_cap     = info.get("marketCap")
+            pe_ratio       = info.get("trailingPE")
+            fwd_pe         = info.get("forwardPE")
+            revenue        = info.get("totalRevenue")
+            revenue_growth = info.get("revenueGrowth")
+            gross_margin   = info.get("grossMargins")
+            analyst_target = info.get("targetMeanPrice")
+            recommendation = info.get("recommendationMean")  # 1=Strong Buy … 5=Sell
+            short_float    = info.get("shortPercentOfFloat")
+            beta           = info.get("beta")
+            earnings_date  = info.get("earningsTimestamp")
+
+            def fmt_pct(v):
+                return f"{v*100:.1f}%" if v is not None else "N/A"
+            def fmt_bn(v):
+                return f"${v/1e9:.1f}B" if v is not None else "N/A"
+            def fmt_num(v, decimals=1):
+                return f"{v:.{decimals}f}" if v is not None else "N/A"
+
+            rec_label = {1: "Strong Buy", 2: "Buy", 3: "Hold", 4: "Underperform", 5: "Sell"}.get(
+                round(recommendation) if recommendation else 0, "N/A"
+            )
+
+            ed_str = "N/A"
+            if earnings_date:
+                try:
+                    ed_str = datetime.fromtimestamp(earnings_date, tz=timezone.utc).strftime("%Y-%m-%d")
+                except Exception:
+                    pass
+
+            return (
+                f"COMPANY INTELLIGENCE: {ticker} ({supplier})\n"
+                f"Sector: {sector} | Industry: {industry}\n"
+                f"Price: ${price} | Market Cap: {fmt_bn(market_cap)} | Beta: {fmt_num(beta)}\n"
+                f"Trailing P/E: {fmt_num(pe_ratio)} | Forward P/E: {fmt_num(fwd_pe)}\n"
+                f"Revenue: {fmt_bn(revenue)} | Revenue Growth YoY: {fmt_pct(revenue_growth)}\n"
+                f"Gross Margin: {fmt_pct(gross_margin)}\n"
+                f"Analyst Consensus: {rec_label} | Mean Target: ${fmt_num(analyst_target)}\n"
+                f"Short Float: {fmt_pct(short_float)} | Next Earnings: {ed_str}"
+            )
+        except Exception as exc:
+            logger.warning("[APOLLO] yfinance fundamentals failed for %s: %s", ticker, exc)
+            return ""
+
+    def _fetch_hermes_company_context(self, supplier: str) -> str:
+        """Pull recent Hermes signals for this company and summarise."""
+        if not self._hermes_key:
+            return ""
+        try:
+            resp = requests.get(
+                f"{_HERMES_BASE}/query/{supplier}",
+                headers={"x-api-key": self._hermes_key},
+                timeout=8,
+            )
+            if resp.status_code != 200:
+                return ""
+            items = resp.json().get("items", resp.json().get("signals", []))[:5]
+            if not items:
+                return ""
+            lines = [f"RECENT HERMES SIGNALS FOR {supplier.upper()}:"]
+            for item in items:
+                date = item.get("published", "")[:10]
+                title = item.get("title", item.get("headline", ""))
+                urgency = item.get("urgency", "")
+                lines.append(f"  [{date}] [{urgency}] {title}")
+            return "\n".join(lines)
+        except Exception as exc:
+            logger.warning("[APOLLO] Hermes context failed for %s: %s", supplier, exc)
+            return ""
+
+    # ------------------------------------------------------------------
     # arXiv ingestion
     # ------------------------------------------------------------------
 

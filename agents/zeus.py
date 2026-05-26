@@ -163,6 +163,9 @@ class ZeusOrchestrator:
         # Evaluate on startup — log current readiness
         self._run_seniority_evaluation()
 
+        # Intra-run state — reset each run_once() cycle
+        self._run_approved_trades: list[dict] = []  # tickers/sides approved this cycle
+
         logger.info(
             "[ZEUS] Initialised — paper=%s mock=%s llm_reasoning=%s",
             self.config.paper_trading, self.config.mock_execution, self.config.use_llm_reasoning,
@@ -188,6 +191,9 @@ class ZeusOrchestrator:
         else:
             raw_signals = self.cb.call("icarus", fn=self.icarus.fetch, fallback=[])
             logger.info("[ZEUS] Icarus (direct) returned %d signal(s).", len(raw_signals))
+
+        # Reset intra-run state so each cycle starts fresh
+        self._run_approved_trades = []
 
         runs: list[PipelineRun] = []
         for sig in raw_signals:
@@ -415,8 +421,21 @@ class ZeusOrchestrator:
             return run.kill("pythia", trace.kill_reason)
         run.sized_signal = sized
 
+        # Stage 4 — Pre-decision enrichment: Apollo researches the company,
+        # giving Zeus real fundamentals + recent news before the LLM decides.
+        ticker = sized.affected_tickers[0] if sized.affected_tickers else ""
+        live_context = ""
+        if ticker:
+            try:
+                live_context = self.apollo.enrich_signal(ticker, sized.supplier)
+            except Exception as exc:
+                logger.warning("[ZEUS] Signal enrichment failed for %s: %s", ticker, exc)
+
         # Stage 4 — ZEUS LLM reasoning + KB query (the final judge)
-        approved, reasoning, override_size = self._zeus_evaluate(sized, macro, trace)
+        approved, reasoning, override_size = self._zeus_evaluate(
+            sized, macro, trace, live_context=live_context,
+            intra_run_trades=list(self._run_approved_trades),
+        )
         trace.zeus_reasoning = reasoning
         trace.zeus_approved  = approved
         if override_size is not None:
@@ -463,6 +482,15 @@ class ZeusOrchestrator:
         trace.side         = result.side
         trace.fill_price   = result.fill_price
 
+        # Record this approval so subsequent signals in this cycle know about it
+        if trace.trade_placed:
+            self._run_approved_trades.append({
+                "ticker": result.symbol,
+                "side":   result.side,
+                "sector": sized.category.value,
+                "supplier": sized.supplier,
+            })
+
         # Feed outcome back to Pattern + KB
         self.cb.call("pythia", fn=lambda: self.pythia.record_trade(sized, result), fallback=None)
         self._write_trace(trace)
@@ -483,6 +511,8 @@ class ZeusOrchestrator:
         sized: SizedSignal,
         macro: MacroContext,
         trace: DecisionTrace,
+        live_context: str = "",
+        intra_run_trades: Optional[list] = None,
     ) -> tuple[bool, str, Optional[float]]:
         """
         Query the KB, build the Director prompt, call Claude, parse response.
@@ -491,12 +521,18 @@ class ZeusOrchestrator:
         if not self.config.use_llm_reasoning:
             return sized.confidence >= self.config.min_zeus_confidence, "LLM reasoning disabled.", None
 
-        kb_context   = self._build_kb_context(sized, macro, trace)
-        prompt       = self._build_director_prompt(sized, macro, kb_context)
+        kb_context = self._build_kb_context(sized, macro, trace)
+        self_critique = self._load_self_critique()
+        prompt = self._build_director_prompt(
+            sized, macro, kb_context,
+            live_context=live_context,
+            intra_run_trades=intra_run_trades or [],
+            self_critique=self_critique,
+        )
 
         try:
             response = self._claude.messages.create(
-                model="claude-haiku-4-5-20251001",
+                model="claude-sonnet-4-6",
                 max_tokens=1500,
                 messages=[{"role": "user", "content": prompt}],
             )
@@ -505,6 +541,18 @@ class ZeusOrchestrator:
             logger.error("[ZEUS] LLM reasoning failed: %s — defaulting to Pattern score.", exc)
             fallback_approved = sized.confidence >= self.config.min_zeus_confidence
             return fallback_approved, f"LLM call failed ({exc}). Used Pattern confidence fallback.", None
+
+    def _load_self_critique(self) -> str:
+        """Read Zeus's own skill file — accumulated self-critique from Apollo's improvement loop."""
+        try:
+            skills_path = Path("knowledge/agents/zeus_skills.md")
+            if skills_path.exists():
+                content = skills_path.read_text(encoding="utf-8").strip()
+                if content:
+                    return content
+        except Exception:
+            pass
+        return ""
 
     def _build_kb_context(
         self,
@@ -548,6 +596,9 @@ class ZeusOrchestrator:
         sized: SizedSignal,
         macro: MacroContext,
         kb_context: str,
+        live_context: str = "",
+        intra_run_trades: Optional[list] = None,
+        self_critique: str = "",
     ) -> str:
         """Assemble the full Director governance prompt from signal + portfolio state."""
         open_positions  = self.argus.open_position_count()
@@ -558,17 +609,50 @@ class ZeusOrchestrator:
             self._seniority_report.system_level.label()
             if self._seniority_report else "Senior"
         )
+
+        # Format trades already approved this cycle
+        if intra_run_trades:
+            trades_this_cycle = "\n".join(
+                f"  • {t['ticker']} {t['side']} ({t['sector']}, supplier: {t['supplier']})"
+                for t in intra_run_trades
+            )
+        else:
+            trades_this_cycle = "  None yet this cycle."
+
+        # Self-critique section — Zeus reads his own accumulated biases
+        self_critique_section = ""
+        if self_critique:
+            self_critique_section = f"""
+═══════════════════════════════════════════════
+YOUR KNOWN BIASES & SELF-CRITIQUE (from Apollo's analysis of your past decisions)
+═══════════════════════════════════════════════
+{self_critique}
+
+Apply this self-knowledge. If you are about to make a decision that matches a known failure pattern, flag it explicitly.
+"""
+
+        # Live company intelligence from Apollo
+        live_context_section = ""
+        if live_context:
+            live_context_section = f"""
+═══════════════════════════════════════════════
+LIVE COMPANY INTELLIGENCE (fetched by Apollo right now)
+═══════════════════════════════════════════════
+{live_context}
+"""
+
         return f"""You are ZEUS — Director of Portfolio Management for Pantheon OS, an autonomous trading operation.
 
-Your role is not to rubber-stamp your analysts' recommendations. Your role is to govern the portfolio. You challenge assumptions, identify what your team missed, ensure every investment decision fits the portfolio strategy, and exercise final approval authority with full accountability for outcomes.
+Your role is not to rubber-stamp your analysts' recommendations. Your role is to govern the portfolio with genuine intelligence. You have memory. You know what you approved 5 minutes ago. You know your own failure patterns. You use all of that.
 
-Your team has already done their work:
+Your team has done their work:
 - Hades (Compliance) cleared this signal
-- Artemis (Macro Strategist) confirmed market conditions are acceptable
-- Pythia (Quant Analyst) sized the position based on historical pattern data
+- Artemis (Macro Strategist) confirmed market conditions
+- Pythia (Quant Analyst) sized the position from historical pattern data
+- Apollo (Research) fetched live company fundamentals right now
 
-Your job now is Director-level governance — not re-doing their analysis, but stress-testing it.
-
+Your job is Director-level governance — stress-testing the team's work, applying your self-knowledge, and making a decision you will be held accountable for.
+{self_critique_section}
 ═══════════════════════════════════════════════
 SIGNAL BRIEF (from Icarus)
 ═══════════════════════════════════════════════
@@ -577,7 +661,7 @@ Supplier:   {sized.supplier}
 Category:   {sized.category.value}
 Severity:   {sized.severity.value}
 Tickers:    {sized.affected_tickers}
-
+{live_context_section}
 ═══════════════════════════════════════════════
 TEAM ASSESSMENT SUMMARY
 ═══════════════════════════════════════════════
@@ -587,12 +671,15 @@ Macro (Artemis):       regime={macro.regime.value} | VIX={macro.vix:.1f} | SPY 1
 Quant sizing (Pythia): pattern confidence={sized.confidence:.2f} | proposed size={sized.position_size_pct*100:.2f}%
 
 ═══════════════════════════════════════════════
-PORTFOLIO STATE (from Argus)
+PORTFOLIO STATE & THIS CYCLE'S DECISIONS (from Argus)
 ═══════════════════════════════════════════════
-Current equity:    €{equity:,.2f}
-Current drawdown:  {current_dd*100:.2f}%
-Open positions:    {open_positions}
-System seniority:  {seniority_level}
+Current equity:      €{equity:,.2f}
+Current drawdown:    {current_dd*100:.2f}%
+Open positions:      {open_positions}
+System seniority:    {seniority_level}
+
+Already approved this cycle:
+{trades_this_cycle}
 
 ═══════════════════════════════════════════════
 KNOWLEDGE BASE & PRECEDENT
@@ -602,27 +689,27 @@ KNOWLEDGE BASE & PRECEDENT
 ═══════════════════════════════════════════════
 YOUR DIRECTOR-LEVEL GOVERNANCE QUESTIONS
 ═══════════════════════════════════════════════
-Before approving, challenge the following:
+Before deciding, you must address:
 
-1. INVESTMENT THESIS: Is the signal-to-trade logic sound? Does this event type historically move this ticker in the expected direction, and within what timeframe?
+1. INVESTMENT THESIS: Does this signal-to-trade logic hold? Does this event type move this specific ticker in the expected direction, in what timeframe, and is that supported by the live fundamentals Apollo just fetched?
 
-2. PORTFOLIO FIT: Does this trade fit the current portfolio? Consider concentration, sector exposure already open, and whether current drawdown warrants caution.
+2. PORTFOLIO FIT: You can see what you already approved this cycle. Does adding this position increase concentration risk? Are you building a correlated book without realising it?
 
-3. ASSUMPTION STRESS TEST: What would have to be true for Pythia's confidence estimate to be wrong? Is the sample size sufficient? Is the regime classification reliable right now?
+3. SELF-AWARENESS: Does this decision match any of your known failure patterns from your self-critique above? If so, is the evidence strong enough to override your bias?
 
-4. ASYMMETRY CHECK: Is the risk/reward favorable? A 3% stop vs 6% target requires a >33% win rate to break even. Does Pythia's data support that?
+4. ASSUMPTION STRESS TEST: What would have to be true for Pythia's confidence to be wrong? Is the regime classification reliable right now? Is the sample size sufficient?
 
-5. WHAT THE TEAM MISSED: Is there anything in the KB context, sector dynamics, or macro environment that your analysts did not explicitly weight?
+5. ASYMMETRY: Is the risk/reward favorable? A 3% stop vs 6% target requires >33% win rate. Does the data support that for this specific ticker and signal type?
 
-Based on this governance review, make your final portfolio decision.
+Based on this, make your final decision.
 
 Respond in this exact JSON format — no markdown, no fences, raw JSON only:
 {{
   "approved": true or false,
   "confidence": 0.0 to 1.0,
-  "position_size_override": null or decimal (e.g. 0.025 for 2.5% — use when Pythia's size needs correction),
+  "position_size_override": null or decimal (e.g. 0.025 for 2.5% — only when Pythia's size needs correction),
   "governance_flags": ["list any concerns even if approving — empty array if none"],
-  "reasoning": "3-5 sentences: investment thesis assessment, portfolio fit verdict, key risk identified, final decision rationale"
+  "reasoning": "3-5 sentences covering: thesis assessment using live fundamentals, portfolio fit given this cycle's trades, self-awareness check, final rationale"
 }}"""
 
     def _parse_llm_response(
