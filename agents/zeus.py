@@ -109,9 +109,12 @@ class ZeusOrchestrator:
         )
 
         # Agents — ZEUS holds the only references
+        # Apollo first so its get_ticker resolver can be injected into Icarus
+        self.apollo    = ApolloAgent(knowledge_base=self.kb)
         self.icarus    = IcarusAgent(
             base_url=self.config.hermes_base_url,
             api_key=os.getenv("HERMES_API_KEY", ""),
+            ticker_resolver=self.apollo.get_ticker,
         )
         self.hades     = HadesAgent()
         self.artemis   = ArtemisAgent()
@@ -139,7 +142,6 @@ class ZeusOrchestrator:
             ib_host=os.getenv("IB_HOST", "ibgateway"),
             ib_port=int(os.getenv("IB_PORT", "4002")),
         )
-        self.apollo    = ApolloAgent(knowledge_base=self.kb)
 
         # Shadow learning layer — wire KB into Argus's OutcomeResolver
         self.argus.set_knowledge_base(self.kb)

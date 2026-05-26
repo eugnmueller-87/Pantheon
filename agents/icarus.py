@@ -132,11 +132,19 @@ def _map_signal(item: dict) -> Optional[RawSignal]:
 
 
 class IcarusAgent:
-    def __init__(self, api_key: Optional[str] = None, base_url: str = HERMES_BASE_URL):
+    def __init__(
+        self,
+        api_key: Optional[str] = None,
+        base_url: str = HERMES_BASE_URL,
+        ticker_resolver=None,
+    ):
         self._api_key  = api_key or os.getenv("HERMES_API_KEY", "")
         self._base_url = base_url.rstrip("/")
         self._seen: set[str] = set()
         self.kb = AgentKnowledgeBase("icarus")
+        # Optional callable(supplier_name) -> ticker | None injected by Zeus
+        # Falls back to the static _resolve_ticker when not provided
+        self._ticker_resolver = ticker_resolver or _resolve_ticker
         if not self._api_key:
             logger.warning("[ICARUS] HERMES_API_KEY not set — requests will be rejected.")
 
@@ -199,6 +207,16 @@ class IcarusAgent:
                 continue
             self._seen.add(sid)
             sig = _map_signal(item)
-            if sig is not None:
-                results.append(sig)
+            if sig is None:
+                continue
+            # Re-resolve ticker using the injected resolver (Apollo live lookup)
+            # if the static map returned nothing
+            if not sig.affected_tickers and sig.supplier:
+                resolved = self._ticker_resolver(sig.supplier)
+                if resolved:
+                    sig.affected_tickers = [resolved]
+                    logger.info("[ICARUS] Live-resolved ticker: %s → %s", sig.supplier, resolved)
+                else:
+                    logger.warning("[ICARUS] No ticker for supplier '%s' — signal will be rejected by Zeus", sig.supplier)
+            results.append(sig)
         return results

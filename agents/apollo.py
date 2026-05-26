@@ -296,8 +296,15 @@ class ApolloAgent:
         for name, ticker in ticker_map.items():
             if name.lower() in lower or lower in name.lower():
                 return ticker
-        # Live yfinance fallback
-        return self._yfinance_lookup(supplier_name)
+        # Live yfinance fallback — persist result so next call is instant
+        resolved = self._yfinance_lookup(supplier_name)
+        if resolved:
+            ticker_map[supplier_name] = resolved
+            _TICKER_MAP_PATH.write_text(
+                json.dumps(ticker_map, indent=2, ensure_ascii=False), encoding="utf-8"
+            )
+            logger.info("[APOLLO] Auto-resolved and cached: %s → %s", supplier_name, resolved)
+        return resolved
 
     def get_ticker_map(self) -> dict[str, str]:
         """Return the full current ticker map — used by Icarus."""
