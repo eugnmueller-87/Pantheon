@@ -200,7 +200,10 @@ class IcarusAgent:
         return self._parse_items(items)
 
     def _parse_items(self, items: list[dict]) -> list[RawSignal]:
-        results: list[RawSignal] = []
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        # First pass: map all items, collect those needing live ticker resolution
+        pre: list[tuple[RawSignal, str]] = []  # (signal, supplier_needing_lookup)
         for item in items:
             sid = item.get("id", "")
             if sid in self._seen:
@@ -209,14 +212,26 @@ class IcarusAgent:
             sig = _map_signal(item)
             if sig is None:
                 continue
-            # Re-resolve ticker using the injected resolver (Apollo live lookup)
-            # if the static map returned nothing
             if not sig.affected_tickers and sig.supplier:
-                resolved = self._ticker_resolver(sig.supplier)
-                if resolved:
-                    sig.affected_tickers = [resolved]
-                    logger.info("[ICARUS] Live-resolved ticker: %s → %s", sig.supplier, resolved)
-                else:
-                    logger.warning("[ICARUS] No ticker for supplier '%s' — signal will be rejected by Zeus", sig.supplier)
-            results.append(sig)
-        return results
+                pre.append((sig, sig.supplier))
+            else:
+                pre.append((sig, ""))
+
+        # Parallel live lookup for unknown suppliers (non-blocking for known ones)
+        needs_lookup = [(sig, sup) for sig, sup in pre if sup]
+        if needs_lookup:
+            with ThreadPoolExecutor(max_workers=min(len(needs_lookup), 4)) as ex:
+                futures = {ex.submit(self._ticker_resolver, sup): sig for sig, sup in needs_lookup}
+                for future in as_completed(futures, timeout=10):
+                    sig = futures[future]
+                    try:
+                        resolved = future.result()
+                        if resolved:
+                            sig.affected_tickers = [resolved]
+                            logger.info("[ICARUS] Live-resolved ticker: %s → %s", sig.supplier, resolved)
+                        else:
+                            logger.warning("[ICARUS] No ticker for '%s' — Zeus will reject as unexecutable", sig.supplier)
+                    except Exception as exc:
+                        logger.warning("[ICARUS] Ticker lookup failed for '%s': %s", sig.supplier, exc)
+
+        return [sig for sig, _ in pre]
