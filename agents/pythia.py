@@ -146,7 +146,6 @@ class PythiaAgent:
             "fill_price":   result.fill_price if result.fill_price and result.fill_price == result.fill_price else None,
             "pnl_pct":      result.pnl_pct,
             "hit":          hit,
-            "paper":        True,
             "recorded_at":  datetime.now(timezone.utc).isoformat(),
         })
 

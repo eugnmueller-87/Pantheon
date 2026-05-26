@@ -793,7 +793,8 @@ class SeniorityEvaluator:
 
     def _ibkr_port_in_code(self) -> bool:
         path = Path("agents/ares.py")
-        return path.exists() and "7497" in path.read_text(encoding="utf-8", errors="ignore")
+        text = path.read_text(encoding="utf-8", errors="ignore") if path.exists() else ""
+        return any(port in text for port in ("4004", "4001", "4002", "IB_PORT"))
 
     def _argus_portfolio_rows(self) -> int:
         try:

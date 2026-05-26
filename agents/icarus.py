@@ -113,6 +113,30 @@ _UUID_RE = re.compile(
 )
 
 
+class _UpstashRedis:
+    """Minimal Upstash REST client for the SISMEMBER / SADD / EXPIRE commands."""
+
+    def __init__(self, url: str, token: str):
+        import httpx
+        self._url     = url.rstrip("/")
+        self._headers = {"Authorization": f"Bearer {token}"}
+        self._client  = httpx.Client(timeout=3.0)
+
+    def _cmd(self, *args):
+        resp = self._client.post(self._url, headers=self._headers, json=list(args))
+        resp.raise_for_status()
+        return resp.json().get("result")
+
+    def sismember(self, key: str, member: str) -> bool:
+        return bool(self._cmd("SISMEMBER", key, member))
+
+    def sadd(self, key: str, *members: str) -> int:
+        return int(self._cmd("SADD", key, *members))
+
+    def expire(self, key: str, seconds: int) -> int:
+        return int(self._cmd("EXPIRE", key, seconds))
+
+
 def _sanitize_signal_id(raw_id: str) -> str:
     """Ensure signal_id is a valid UUID — generate one if Hermes sends a truncated ID."""
     if raw_id and _UUID_RE.match(raw_id.strip()):
@@ -189,6 +213,10 @@ def _map_signal(item: dict) -> Optional[RawSignal]:
     )
 
 
+_SEEN_REDIS_KEY = "icarus:seen_signals"
+_SEEN_TTL_SECONDS = 7 * 24 * 3600  # matches _MAX_SIGNAL_AGE_HOURS
+
+
 class IcarusAgent:
     def __init__(
         self,
@@ -198,13 +226,45 @@ class IcarusAgent:
     ):
         self._api_key  = api_key or os.getenv("HERMES_API_KEY", "")
         self._base_url = base_url.rstrip("/")
-        self._seen: set[str] = set()
+        self._seen: set[str] = set()  # in-memory fallback
+        self._redis = self._init_redis()
         self.kb = AgentKnowledgeBase("icarus")
         # Optional callable(supplier_name) -> ticker | None injected by Zeus
         # Falls back to the static _resolve_ticker when not provided
         self._ticker_resolver = ticker_resolver or _resolve_ticker
         if not self._api_key:
             logger.warning("[ICARUS] HERMES_API_KEY not set — requests will be rejected.")
+
+    def _init_redis(self):
+        """Connect to Upstash Redis for persistent seen-set. Returns None if unavailable."""
+        try:
+            import httpx
+            url   = os.getenv("UPSTASH_REDIS_REST_URL", "")
+            token = os.getenv("UPSTASH_REDIS_REST_TOKEN", "")
+            if not url or not token:
+                return None
+            # Lightweight wrapper — no dependency beyond httpx (already installed)
+            return _UpstashRedis(url, token)
+        except Exception as exc:
+            logger.debug("[ICARUS] Redis init failed (using in-memory seen set): %s", exc)
+            return None
+
+    def _is_seen(self, sid: str) -> bool:
+        if self._redis:
+            try:
+                return bool(self._redis.sismember(_SEEN_REDIS_KEY, sid))
+            except Exception:
+                pass
+        return sid in self._seen
+
+    def _mark_seen(self, sid: str) -> None:
+        self._seen.add(sid)
+        if self._redis:
+            try:
+                self._redis.sadd(_SEEN_REDIS_KEY, sid)
+                self._redis.expire(_SEEN_REDIS_KEY, _SEEN_TTL_SECONDS)
+            except Exception:
+                pass
 
     @property
     def _headers(self) -> dict:
@@ -264,9 +324,9 @@ class IcarusAgent:
         pre: list[tuple[RawSignal, str]] = []  # (signal, supplier_needing_lookup)
         for item in items:
             sid = item.get("id", "")
-            if sid in self._seen:
+            if self._is_seen(sid):
                 continue
-            self._seen.add(sid)
+            self._mark_seen(sid)
             sig = _map_signal(item)
             if sig is None:
                 continue

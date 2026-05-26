@@ -61,12 +61,12 @@ class OutcomeResolver:
 
     def __init__(self, knowledge_base=None):
         self._kb          = knowledge_base   # shared KnowledgeBase instance
-        self._open_orders: dict[str, float] = {}   # order_id → fill_price
+        self._open_orders: dict[str, tuple[float, str]] = {}   # order_id → (fill_price, side)
 
-    def track_open(self, order_id: str, fill_price: float, symbol: str) -> None:
+    def track_open(self, order_id: str, fill_price: float, symbol: str, side: str = "BUY") -> None:
         """Register a newly placed order so we can detect when it closes."""
-        self._open_orders[order_id] = fill_price
-        logger.debug("[OUTCOME] Tracking open order %s %s @ %.2f", order_id, symbol, fill_price)
+        self._open_orders[order_id] = (fill_price, side)
+        logger.debug("[OUTCOME] Tracking open order %s %s @ %.2f side=%s", order_id, symbol, fill_price, side)
 
     def resolve_closed(self, order_id: str, exit_price: float,
                        side: str, closed_at: Optional[datetime] = None) -> Optional[float]:
@@ -75,7 +75,11 @@ class OutcomeResolver:
         Calculates pnl_pct, writes to Supabase + ChromaDB, removes from tracking.
         Returns pnl_pct or None if order_id was not tracked.
         """
-        fill_price = self._open_orders.pop(order_id, None)
+        entry = self._open_orders.pop(order_id, None)
+        if entry is None:
+            fill_price = None
+        else:
+            fill_price, side = entry
         if fill_price is None:
             logger.debug("[OUTCOME] order_id %s not in tracking — skipping", order_id)
             return None
@@ -125,9 +129,10 @@ class OutcomeResolver:
             if symbol and symbol in open_symbols:
                 continue
 
-            # Position no longer open — resolve at current price
+            # Position no longer open — resolve at current price using tracked side
             if symbol and symbol in current_prices:
-                pnl = self.resolve_closed(order_id, current_prices[symbol], "BUY")
+                _, tracked_side = self._open_orders.get(order_id, (None, "BUY"))
+                pnl = self.resolve_closed(order_id, current_prices[symbol], tracked_side or "BUY")
                 if pnl is not None:
                     resolved.append(pnl)
 

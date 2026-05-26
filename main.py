@@ -18,6 +18,7 @@ import argparse
 import json
 import logging
 import os
+import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -56,6 +57,7 @@ def build_zeus() -> ZeusOrchestrator:
 # ---------------------------------------------------------------------------
 
 _zeus: ZeusOrchestrator | None = None
+_run_lock = threading.Lock()  # prevents concurrent run_once() calls
 
 
 class ZeusHandler(BaseHTTPRequestHandler):
@@ -102,7 +104,13 @@ class ZeusHandler(BaseHTTPRequestHandler):
 
     def _handle_run(self):
         try:
-            runs = _zeus.run_once()
+            if not _run_lock.acquire(blocking=False):
+                self._json_response(409, {"error": "pipeline already running"})
+                return
+            try:
+                runs = _zeus.run_once()
+            finally:
+                _run_lock.release()
             summary = [
                 {
                     "run_id":      r.run_id,
@@ -200,8 +208,14 @@ def _auto_run_loop(interval_seconds: int):
     while True:
         try:
             if _zeus and _zeus.status.value != "halted":
-                logger.info("[MAIN] Auto-run triggered")
-                runs = _zeus.run_once()
+                if _run_lock.acquire(blocking=False):
+                    try:
+                        logger.info("[MAIN] Auto-run triggered")
+                        runs = _zeus.run_once()
+                    finally:
+                        _run_lock.release()
+                else:
+                    logger.info("[MAIN] Auto-run skipped — pipeline already running")
                 logger.info("[MAIN] Auto-run complete — %d signal(s) processed", len(runs))
         except Exception as exc:
             logger.exception("[MAIN] Auto-run error: %s", exc)

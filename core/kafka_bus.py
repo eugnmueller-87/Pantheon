@@ -117,7 +117,7 @@ def consume_raw_signals(
             TOPIC_RAW_SIGNALS,
             bootstrap_servers=BOOTSTRAP,
             group_id=group_id,
-            auto_offset_reset="earliest",
+            auto_offset_reset="latest",
             enable_auto_commit=True,
             value_deserializer=lambda b: json.loads(b.decode()),
             consumer_timeout_ms=timeout_ms,

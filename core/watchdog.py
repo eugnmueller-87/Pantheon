@@ -152,7 +152,7 @@ class Watchdog:
                 reg.restart_count += 1  # increment past MAX so we don't spam
             return
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         if reg.last_restart_at:
             elapsed = (now - reg.last_restart_at).total_seconds()
             if elapsed < RESTART_COOLDOWN:

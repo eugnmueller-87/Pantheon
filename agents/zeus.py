@@ -22,6 +22,7 @@ import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 import anthropic
@@ -187,8 +188,14 @@ class ZeusOrchestrator:
             raw_signals = consume_raw_signals()
             logger.info("[ZEUS] Kafka: consumed %d signal(s).", len(raw_signals))
             if not raw_signals:
-                # Kafka available but empty — also fetch live so we never miss a cycle
-                raw_signals = self.cb.call("icarus", fn=self.icarus.fetch, fallback=[])
+                # Kafka up but empty — fetch directly without republishing to Kafka
+                # (icarus.fetch republishes, so we call _fetch_briefing directly)
+                try:
+                    raw_signals = self.icarus._fetch_briefing()
+                    logger.info("[ZEUS] Icarus (direct, no republish): %d signal(s).", len(raw_signals))
+                except Exception as exc:
+                    logger.warning("[ZEUS] Icarus direct fetch failed: %s", exc)
+                    raw_signals = []
         else:
             raw_signals = self.cb.call("icarus", fn=self.icarus.fetch, fallback=[])
             logger.info("[ZEUS] Icarus (direct) returned %d signal(s).", len(raw_signals))

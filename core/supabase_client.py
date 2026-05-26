@@ -110,9 +110,11 @@ def update_trade_pnl(order_id: str, pnl_pct: float, hit: bool, closed_at: dateti
 # ── Portfolio state ────────────────────────────────────────────────────────────
 
 def upsert_portfolio_state(state: dict) -> None:
-    """Write an Argus equity snapshot. Called every 5s by Argus.refresh()."""
+    """Overwrite the single portfolio state row. Called every Argus refresh."""
     try:
-        get_client().table("portfolio_state").insert(state).execute()
+        get_client().table("portfolio_state").upsert(
+            {**state, "state_id": "singleton"}, on_conflict="state_id"
+        ).execute()
     except Exception as exc:
         logger.error("[SUPABASE] upsert_portfolio_state failed: %s", exc)
 

@@ -113,7 +113,7 @@ class KnowledgeBase:
             "regime":     trace.trend_regime,
             "vix":        trace.trend_vix,
             "approved":   str(trace.zeus_approved),
-            "pnl_pct":    trace.pnl_pct or 0.0,
+            "pnl_pct":    trace.pnl_pct,
             "timestamp":  trace.timestamp.isoformat(),
         }
 
@@ -266,7 +266,7 @@ class KnowledgeBase:
             metas = results.get("metadatas", [])
             if not metas:
                 return {}
-            pnls = [m["pnl_pct"] for m in metas if m.get("pnl_pct") != 0.0]
+            pnls = [m["pnl_pct"] for m in metas if m.get("pnl_pct") is not None]
             wins = [p for p in pnls if p > 0]
             return {
                 "n": len(pnls),
