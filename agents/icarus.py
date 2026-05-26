@@ -164,6 +164,8 @@ def _map_signal(item: dict) -> Optional[RawSignal]:
 
     try:
         published_at = datetime.fromisoformat(item["published"].replace("Z", "+00:00"))
+        if published_at.tzinfo is None:
+            published_at = published_at.replace(tzinfo=timezone.utc)
     except Exception:
         published_at = datetime.now(timezone.utc)
 

@@ -212,10 +212,7 @@ class ArgusAgent:
         if self._ib is None or not self._ib.isConnected():
             import asyncio
             from ib_insync import IB
-            try:
-                asyncio.get_event_loop()
-            except RuntimeError:
-                asyncio.set_event_loop(asyncio.new_event_loop())
+            asyncio.set_event_loop(asyncio.new_event_loop())
             self._ib = IB()
             self._ib.connect(self._ib_host, self._ib_port, clientId=2)
         return self._ib
