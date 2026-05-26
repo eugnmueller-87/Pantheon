@@ -101,7 +101,7 @@ class TestOutcomeResolver:
 
     def test_short_pnl_inverted(self):
         resolver = OutcomeResolver()
-        resolver.track_open("ord-1", fill_price=100.0, symbol="NVDA")
+        resolver.track_open("ord-1", fill_price=100.0, symbol="NVDA", side="SELL")
         # Short: price went down = profit
         pnl = resolver.resolve_closed("ord-1", exit_price=97.0, side="SELL")
         assert pnl == pytest.approx(0.03, rel=0.01)

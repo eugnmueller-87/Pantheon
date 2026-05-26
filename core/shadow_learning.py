@@ -136,8 +136,11 @@ class OutcomeResolver:
 
             # Position no longer open — resolve at current price using tracked side
             if symbol and symbol in current_prices:
-                _, tracked_side = self._open_orders.get(order_id, (None, "BUY"))
-                pnl = self.resolve_closed(order_id, current_prices[symbol], tracked_side or "BUY")
+                entry = self._open_orders.get(order_id)
+                if entry is None:
+                    continue  # lost tracking — skip rather than guess side
+                _, tracked_side = entry
+                pnl = self.resolve_closed(order_id, current_prices[symbol], tracked_side)
                 if pnl is not None:
                     resolved.append(pnl)
 
