@@ -1,6 +1,15 @@
 """
 Agent 1 — Icarus Signal Watcher
-Pulls classified signals directly from Hermes (live on Railway).
+
+Primary path  — reads unconsumed signals from Supabase (written by Hermes).
+Fallback path — polls Hermes Railway API directly when Supabase has nothing
+                new, then persists those signals into Supabase for auditability.
+
+This means:
+  • Every signal that ever reached Zeus is queryable in Supabase.
+  • Hermes going down doesn't immediately break Zeus (backlog survives).
+  • The Grafana dashboard can show signals-received vs signals-traded.
+
 Imports only from core.types — never from other agents.
 """
 
@@ -371,53 +380,181 @@ class IcarusAgent:
         return {"x-api-key": self._api_key}
 
     def health(self) -> AgentHealth:
+        """Healthy if Supabase has signals OR Hermes API is reachable."""
+        # Primary: try Supabase
+        try:
+            import core.supabase_client as supa
+            supa.get_client()  # just verify connection
+            return AgentHealth.HEALTHY
+        except Exception:
+            pass
+        # Fallback: try Hermes directly
         try:
             r = requests.get(f"{self._base_url}/health", headers=self._headers, timeout=5)
             return AgentHealth.HEALTHY if r.status_code == 200 else AgentHealth.DEGRADED
         except Exception:
             return AgentHealth.FAILED
 
+    # ------------------------------------------------------------------
+    # Primary public API
+    # ------------------------------------------------------------------
+
     def fetch(self) -> list[RawSignal]:
-        signals: list[RawSignal] = []
-        try:
-            signals = self._fetch_briefing()
-        except Exception as exc:
-            logger.error("[ICARUS] Hermes /briefing failed: %s", exc)
-        logger.info("[ICARUS] %d new signal(s) from Hermes.", len(signals))
-        # Publish to Kafka event bus (no-op if Kafka unavailable)
+        """
+        Fetch new signals.  Strategy:
+          1. Read unconsumed rows from Supabase (written by Hermes).
+          2. If Supabase returns nothing, fall back to polling Hermes API
+             directly and persist those signals into Supabase.
+        Publishes to Kafka regardless of which path was used.
+        """
+        signals = self._fetch_from_supabase()
+
+        if not signals:
+            logger.info("[ICARUS] No unconsumed signals in Supabase — falling back to Hermes API.")
+            try:
+                signals = self._fetch_from_hermes_and_persist()
+            except Exception as exc:
+                logger.error("[ICARUS] Hermes fallback failed: %s", exc)
+
+        logger.info("[ICARUS] %d new signal(s) ready for Zeus.", len(signals))
+
         if signals:
             from core.kafka_bus import publish_raw_signal
             for sig in signals:
                 publish_raw_signal(sig)
+
         return signals
 
     def fetch_company(self, company: str) -> list[RawSignal]:
+        """Ad-hoc company query — always hits Hermes API directly."""
         try:
             resp = requests.get(f"{self._base_url}/query/{company}", headers=self._headers, timeout=15)
             resp.raise_for_status()
-            return self._parse_items(resp.json().get("items", []))
+            return self._parse_hermes_items(resp.json().get("items", []), persist=True)
         except Exception as exc:
             logger.error("[ICARUS] /query/%s failed: %s", company, exc)
             return []
 
     def search(self, query: str) -> list[RawSignal]:
+        """Full-text search — always hits Hermes API directly."""
         try:
             resp = requests.get(f"{self._base_url}/search", headers=self._headers,
                                 params={"q": query}, timeout=15)
             resp.raise_for_status()
-            return self._parse_items(resp.json().get("results", []))
+            return self._parse_hermes_items(resp.json().get("results", []), persist=True)
         except Exception as exc:
             logger.error("[ICARUS] /search failed: %s", exc)
             return []
 
-    def _fetch_briefing(self) -> list[RawSignal]:
+    # ------------------------------------------------------------------
+    # Supabase primary path
+    # ------------------------------------------------------------------
+
+    def _fetch_from_supabase(self) -> list[RawSignal]:
+        """
+        Read unconsumed signals from Supabase, map them to RawSignal,
+        apply quality filters, and mark consumed in one atomic DB call.
+        """
+        _USE_SUPABASE = bool(
+            os.getenv("SUPABASE_URL") and os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+        )
+        if not _USE_SUPABASE:
+            return []
+
+        try:
+            import core.supabase_client as supa
+            rows = supa.get_unconsumed_signals(limit=100)
+        except Exception as exc:
+            logger.warning("[ICARUS] Supabase read failed: %s", exc)
+            return []
+
+        if not rows:
+            return []
+
+        signals: list[RawSignal] = []
+        consumed_ids: list[str] = []
+
+        for row in rows:
+            # Re-use the same mapping logic — build a Hermes-style dict from DB row
+            item = {
+                "id":               row.get("hermes_id") or row.get("signal_id", ""),
+                "url":              row.get("source_url", ""),
+                "title":            row.get("headline", ""),
+                "summary":          row.get("summary", ""),
+                "published":        row.get("published_at", ""),
+                "signal_type":      row.get("hermes_signal_type", "OTHER"),
+                "urgency":          row.get("urgency", "LOW"),
+                "is_significant":   row.get("is_significant", False),
+                "supplier":         row.get("supplier", ""),
+            }
+            # Inject the Supabase UUID as signal_id so traces correlate correctly
+            sig = _map_signal(item)
+            if sig is None:
+                consumed_ids.append(row["signal_id"])  # mark dropped rows consumed too
+                continue
+
+            # Preserve the Supabase UUID (already sanitised)
+            sig.signal_id = row["signal_id"]
+
+            # Restore pre-resolved tickers if Hermes already wrote them
+            db_tickers = row.get("affected_tickers") or []
+            if db_tickers:
+                sig.affected_tickers = db_tickers
+
+            if self._quality.should_suppress(sig):
+                consumed_ids.append(row["signal_id"])
+                continue
+
+            self._quality.record_seen(sig)
+
+            # Live ticker resolution if still empty
+            if not sig.affected_tickers and sig.supplier:
+                try:
+                    resolved = self._ticker_resolver(sig.supplier)
+                    if resolved:
+                        sig.affected_tickers = [resolved]
+                        logger.info("[ICARUS] Supabase path: resolved %s → %s", sig.supplier, resolved)
+                    else:
+                        logger.warning("[ICARUS] No ticker for '%s' — Zeus will reject", sig.supplier)
+                except Exception as exc:
+                    logger.warning("[ICARUS] Ticker lookup failed for '%s': %s", sig.supplier, exc)
+
+            signals.append(sig)
+            consumed_ids.append(row["signal_id"])
+
+        # Mark all processed rows consumed in one call
+        if consumed_ids:
+            n = supa.mark_signals_consumed(consumed_ids)
+            logger.info("[ICARUS] Supabase: %d signal(s) fetched, %d row(s) marked consumed.", len(signals), n)
+
+        return signals
+
+    # ------------------------------------------------------------------
+    # Hermes fallback path
+    # ------------------------------------------------------------------
+
+    def _fetch_from_hermes_and_persist(self) -> list[RawSignal]:
+        """
+        Poll Hermes /briefing directly (legacy path).
+        Persists each item into Supabase so the audit trail is complete
+        and future cycles can find them if Zeus hasn't processed them yet.
+        """
         resp = requests.get(f"{self._base_url}/briefing", headers=self._headers, timeout=20)
         resp.raise_for_status()
         data  = resp.json()
         items = data.get("signals", data.get("items", []))
-        return self._parse_items(items)
+        return self._parse_hermes_items(items, persist=True)
 
-    def _parse_items(self, items: list[dict]) -> list[RawSignal]:
+    # kept for fetch_company / search / _fetch_briefing (used by zeus.py direct call)
+    def _fetch_briefing(self) -> list[RawSignal]:
+        """Direct Hermes briefing — used by Zeus when Kafka is up but empty."""
+        return self._fetch_from_hermes_and_persist()
+
+    def _parse_hermes_items(self, items: list[dict], persist: bool = False) -> list[RawSignal]:
+        """
+        Map raw Hermes dicts to RawSignal.  Optionally persist each item to
+        Supabase (idempotent via hermes_id unique constraint).
+        """
         from concurrent.futures import ThreadPoolExecutor, as_completed
 
         # First pass: map all items, collect those needing live ticker resolution
@@ -455,7 +592,89 @@ class IcarusAgent:
                     except Exception as exc:
                         logger.warning("[ICARUS] Ticker lookup failed for '%s': %s", sig.supplier, exc)
 
-        return [sig for sig, _ in pre]
+        result = [sig for sig, _ in pre]
+
+        # Persist to Supabase so the audit trail is always complete
+        if persist:
+            self._persist_to_supabase(items, result)
+
+        return result
+
+    def _persist_to_supabase(self, raw_items: list[dict], signals: list[RawSignal]) -> None:
+        """
+        Write Hermes items to Supabase signals table (idempotent).
+        Uses the upsert_hermes_signal RPC so duplicate hermes_ids are silently skipped.
+        Marks inserted rows immediately consumed (we just processed them inline).
+        """
+        _USE_SUPABASE = bool(
+            os.getenv("SUPABASE_URL") and os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+        )
+        if not _USE_SUPABASE:
+            return
+
+        # Build a quick lookup: hermes_id → RawSignal (for resolved tickers)
+        sig_by_raw_id: dict[str, RawSignal] = {}
+        for sig in signals:
+            # signal_id is the sanitised UUID — we need the original Hermes id
+            # We stored hermes_signal_type on sig; raw id is harder to recover,
+            # so we index by headline+supplier as a key (good enough for matching)
+            sig_by_raw_id[f"{sig.headline}|{sig.supplier}"] = sig
+
+        try:
+            import core.supabase_client as supa
+            _SEVERITY_MAP = {1: "LOW", 2: "MEDIUM", 3: "HIGH", 4: "CRITICAL"}
+            _CATEGORY_ENUMS = {
+                "supplier_disruption", "positive_news", "earnings_surprise",
+                "regulatory_action", "macro_shift",
+            }
+
+            for item in raw_items:
+                signal_type = item.get("signal_type", "OTHER")
+                from core.types import SignalCategory
+                category_val = _HERMES_TYPE_MAP.get(signal_type, SignalCategory.NEUTRAL).value
+                if category_val not in _CATEGORY_ENUMS:
+                    continue  # skip neutral — Icarus already filters these
+
+                try:
+                    published_at = datetime.fromisoformat(
+                        item.get("published", "").replace("Z", "+00:00")
+                    )
+                except Exception:
+                    published_at = datetime.now(timezone.utc)
+
+                sig_key = f"{item.get('title', '')}|{item.get('supplier', '')}"
+                matched_sig = sig_by_raw_id.get(sig_key)
+                tickers = matched_sig.affected_tickers if matched_sig else []
+
+                urgency  = item.get("urgency", "LOW")
+                severity_level = "HIGH" if (
+                    item.get("is_significant") and urgency == "HIGH"
+                ) else urgency if urgency in ("HIGH", "MEDIUM", "LOW") else "LOW"
+
+                supa.upsert_hermes_signal({
+                    "hermes_id":          item.get("id", ""),
+                    "source_url":         item.get("url", ""),
+                    "headline":           item.get("title", ""),
+                    "summary":            item.get("summary", ""),
+                    "published_at":       published_at.isoformat(),
+                    "category":           category_val,
+                    "severity":           severity_level,
+                    "affected_tickers":   tickers,
+                    "raw_text":           f"{item.get('title', '')} {item.get('summary', '')}",
+                    "supplier":           item.get("supplier", ""),
+                    "hermes_signal_type": signal_type,
+                    "urgency":            urgency,
+                    "is_significant":     bool(item.get("is_significant", False)),
+                })
+        except Exception as exc:
+            logger.warning("[ICARUS] Supabase persist failed (non-fatal): %s", exc)
+
+    # ------------------------------------------------------------------
+    # Legacy alias — kept so Zeus's direct _fetch_briefing call still works
+    # ------------------------------------------------------------------
+
+    def _parse_items(self, items: list[dict]) -> list[RawSignal]:
+        return self._parse_hermes_items(items, persist=False)
 
     def record_signal_outcome(self, sig: RawSignal, approved: bool) -> None:
         """Called by Zeus after each decision so Icarus can learn which patterns get approved."""

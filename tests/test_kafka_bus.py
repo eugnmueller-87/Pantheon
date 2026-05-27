@@ -259,26 +259,33 @@ class TestSerialisation:
 
 class TestIcarusKafkaIntegration:
     def test_icarus_fetch_publishes_to_kafka(self):
-        """IcarusAgent.fetch() calls publish_raw_signal for each signal."""
+        """IcarusAgent.fetch() calls publish_raw_signal for each signal.
+
+        Mocks both fetch paths so no real network/DB calls are made:
+          - _fetch_from_supabase → [] (no DB available in tests)
+          - _fetch_from_hermes_and_persist → mock_signals (fallback path)
+        """
         from agents.icarus import IcarusAgent
         agent = IcarusAgent(api_key="test")
 
         mock_signals = [_make_signal()]
-        with patch.object(agent, "_fetch_briefing", return_value=mock_signals):
-            with patch("core.kafka_bus.publish_raw_signal", return_value=True) as mock_pub:
-                result = agent.fetch()
+        with patch.object(agent, "_fetch_from_supabase", return_value=[]):
+            with patch.object(agent, "_fetch_from_hermes_and_persist", return_value=mock_signals):
+                with patch("core.kafka_bus.publish_raw_signal", return_value=True) as mock_pub:
+                    result = agent.fetch()
 
         assert len(result) == 1
         mock_pub.assert_called_once_with(mock_signals[0])
 
     def test_icarus_fetch_no_publish_on_empty(self):
-        """No publish calls when Hermes returns no signals."""
+        """No publish calls when both Supabase and Hermes return no signals."""
         from agents.icarus import IcarusAgent
         agent = IcarusAgent(api_key="test")
 
-        with patch.object(agent, "_fetch_briefing", return_value=[]):
-            with patch("core.kafka_bus.publish_raw_signal") as mock_pub:
-                result = agent.fetch()
+        with patch.object(agent, "_fetch_from_supabase", return_value=[]):
+            with patch.object(agent, "_fetch_from_hermes_and_persist", return_value=[]):
+                with patch("core.kafka_bus.publish_raw_signal") as mock_pub:
+                    result = agent.fetch()
 
         assert result == []
         mock_pub.assert_not_called()

@@ -65,6 +65,8 @@ class ZeusConfig:
     min_zeus_confidence:        float = 0.55
     use_llm_reasoning:          bool  = True
     starting_equity:            float = 100.0  # seed capital — MilestoneManager tracks from here
+    # Hermes Railway URL — Icarus uses Supabase as primary source;
+    # this is the fallback when Supabase has no unconsumed signals.
     hermes_base_url:            str   = "https://hermes-agent-production-114e.up.railway.app"
     default_account_equity:     float = 100_000.0
     stop_loss_pct:              float = 0.03

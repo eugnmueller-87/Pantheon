@@ -21,11 +21,14 @@ _DEFAULTS: dict[str, Any] = {
     "webhook_port": 8080,
     "hermes_base_url": "https://hermes-agent-production-114e.up.railway.app",
     "hermes_feeds": [],
+    # Signal source strategy: "supabase" (primary, Hermes writes here) or "api" (direct poll)
+    "signal_source": "supabase",
     # IBKR
     "ib_host": "127.0.0.1",
     "ib_paper_port": 7497,
     "ib_live_port": 7496,
     "default_account_equity": 4_000.0,     # realistic starting capital — paper trades real-world constraints
+    "starting_equity": 4_000.0,
     # Risk parameters — Ares bracket order
     "stop_loss_pct": 0.03,        # 3% stop
     "take_profit_pct": 0.06,      # 6% target (2:1 R/R)

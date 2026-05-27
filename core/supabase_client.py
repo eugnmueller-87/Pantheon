@@ -190,6 +190,78 @@ def insert_signal(signal: dict) -> Optional[dict]:
         return None
 
 
+def upsert_hermes_signal(signal: dict) -> Optional[str]:
+    """
+    Hermes sink — idempotent insert via the upsert_hermes_signal DB function.
+    `signal` must contain: hermes_id, source_url, headline, summary,
+    published_at (ISO string), category, severity, affected_tickers (list),
+    raw_text, supplier, hermes_signal_type, urgency, is_significant.
+    Returns the signal_id UUID string or None on error.
+    """
+    try:
+        res = get_client().rpc("upsert_hermes_signal", {
+            "p_hermes_id":          signal["hermes_id"],
+            "p_source_url":         signal.get("source_url", ""),
+            "p_headline":           signal.get("headline", ""),
+            "p_summary":            signal.get("summary", ""),
+            "p_published_at":       signal["published_at"],
+            "p_category":           signal["category"],
+            "p_severity":           signal["severity"],
+            "p_affected_tickers":   signal.get("affected_tickers", []),
+            "p_raw_text":           signal.get("raw_text", ""),
+            "p_supplier":           signal.get("supplier", ""),
+            "p_hermes_signal_type": signal.get("hermes_signal_type", ""),
+            "p_urgency":            signal.get("urgency", "LOW"),
+            "p_is_significant":     signal.get("is_significant", False),
+        }).execute()
+        return res.data  # UUID string
+    except Exception as exc:
+        logger.error("[SUPABASE] upsert_hermes_signal failed: %s", exc)
+        return None
+
+
+def get_unconsumed_signals(limit: int = 100) -> list[dict]:
+    """
+    Icarus sink reader — fetch unconsumed signals Hermes has written.
+    Returns rows ordered oldest-first so Icarus processes in arrival order.
+    """
+    try:
+        res = (
+            get_client()
+            .table("signals")
+            .select(
+                "signal_id, hermes_id, source_url, headline, summary, "
+                "published_at, category, severity, affected_tickers, "
+                "raw_text, supplier, hermes_signal_type, urgency, is_significant"
+            )
+            .eq("consumed_by_icarus", False)
+            .order("published_at", desc=False)
+            .limit(limit)
+            .execute()
+        )
+        return res.data or []
+    except Exception as exc:
+        logger.error("[SUPABASE] get_unconsumed_signals failed: %s", exc)
+        return []
+
+
+def mark_signals_consumed(signal_ids: list[str]) -> int:
+    """
+    Mark a batch of signal_ids as consumed by Icarus.
+    Returns the number of rows actually updated.
+    """
+    if not signal_ids:
+        return 0
+    try:
+        res = get_client().rpc("mark_signals_consumed", {
+            "signal_ids": signal_ids,
+        }).execute()
+        return res.data or 0
+    except Exception as exc:
+        logger.error("[SUPABASE] mark_signals_consumed failed: %s", exc)
+        return 0
+
+
 # ── Knowledge documents (pgvector) ────────────────────────────────────────────
 
 def upsert_knowledge_doc(doc: dict) -> None:
