@@ -55,6 +55,7 @@ services:
       - TZ=Europe/Berlin
     volumes:
       - zeus_knowledge:/app/knowledge
+      - zeus_config:/app/config
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 30s
@@ -193,6 +194,7 @@ services:
 
 volumes:
   zeus_knowledge:
+  zeus_config:
   grafana_data:
   redis_data:
   kafka_data:
