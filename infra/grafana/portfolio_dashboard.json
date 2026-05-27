@@ -1,0 +1,416 @@
+{
+  "dashboard": {
+    "id": null,
+    "uid": "pantheon-portfolio",
+    "title": "Pantheon OS — Portfolio",
+    "tags": ["pantheon", "trading", "portfolio"],
+    "timezone": "Europe/Berlin",
+    "schemaVersion": 38,
+    "version": 1,
+    "refresh": "30s",
+    "time": { "from": "now-1h", "to": "now" },
+    "panels": [
+      {
+        "id": 1,
+        "type": "stat",
+        "title": "Kapital (EUR)",
+        "gridPos": { "x": 0, "y": 0, "w": 5, "h": 4 },
+        "datasource": { "type": "grafana-postgresql-datasource", "uid": "supabase-postgres" },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "currencyEUR",
+            "decimals": 2,
+            "color": { "mode": "fixed", "fixedColor": "green" },
+            "mappings": []
+          }
+        },
+        "options": {
+          "reduceOptions": { "calcs": ["lastNotNull"] },
+          "textMode": "auto",
+          "colorMode": "background",
+          "graphMode": "none"
+        },
+        "targets": [{
+          "datasource": { "uid": "supabase-postgres" },
+          "rawSql": "SELECT refreshed_at as time, total_equity as value FROM portfolio_state ORDER BY refreshed_at DESC LIMIT 1",
+          "format": "time_series",
+          "refId": "A"
+        }]
+      },
+      {
+        "id": 2,
+        "type": "stat",
+        "title": "Peak Kapital (EUR)",
+        "gridPos": { "x": 5, "y": 0, "w": 5, "h": 4 },
+        "datasource": { "type": "grafana-postgresql-datasource", "uid": "supabase-postgres" },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "currencyEUR",
+            "decimals": 2,
+            "color": { "mode": "fixed", "fixedColor": "blue" },
+            "mappings": []
+          }
+        },
+        "options": {
+          "reduceOptions": { "calcs": ["lastNotNull"] },
+          "textMode": "auto",
+          "colorMode": "background",
+          "graphMode": "none"
+        },
+        "targets": [{
+          "datasource": { "uid": "supabase-postgres" },
+          "rawSql": "SELECT refreshed_at as time, peak_equity as value FROM portfolio_state ORDER BY refreshed_at DESC LIMIT 1",
+          "format": "time_series",
+          "refId": "A"
+        }]
+      },
+      {
+        "id": 3,
+        "type": "stat",
+        "title": "Drawdown",
+        "gridPos": { "x": 10, "y": 0, "w": 4, "h": 4 },
+        "datasource": { "type": "grafana-postgresql-datasource", "uid": "supabase-postgres" },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent",
+            "decimals": 2,
+            "color": { "mode": "thresholds" },
+            "thresholds": { "steps": [
+              { "color": "green", "value": 0 },
+              { "color": "yellow", "value": 3 },
+              { "color": "red", "value": 6 }
+            ]},
+            "mappings": []
+          }
+        },
+        "options": {
+          "reduceOptions": { "calcs": ["lastNotNull"] },
+          "textMode": "auto",
+          "colorMode": "background",
+          "graphMode": "none"
+        },
+        "targets": [{
+          "datasource": { "uid": "supabase-postgres" },
+          "rawSql": "SELECT refreshed_at as time, ROUND((current_drawdown_pct * 100)::numeric, 2) as value FROM portfolio_state ORDER BY refreshed_at DESC LIMIT 1",
+          "format": "time_series",
+          "refId": "A"
+        }]
+      },
+      {
+        "id": 4,
+        "type": "stat",
+        "title": "Offene Positionen",
+        "gridPos": { "x": 14, "y": 0, "w": 4, "h": 4 },
+        "datasource": { "type": "grafana-postgresql-datasource", "uid": "supabase-postgres" },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short",
+            "color": { "mode": "fixed", "fixedColor": "blue" },
+            "mappings": []
+          }
+        },
+        "options": {
+          "reduceOptions": { "calcs": ["lastNotNull"] },
+          "textMode": "auto",
+          "colorMode": "background",
+          "graphMode": "none"
+        },
+        "targets": [{
+          "datasource": { "uid": "supabase-postgres" },
+          "rawSql": "SELECT NOW() as time, COUNT(*) as value FROM portfolio_positions WHERE closed_at IS NULL",
+          "format": "time_series",
+          "refId": "A"
+        }]
+      },
+      {
+        "id": 5,
+        "type": "stat",
+        "title": "Unrealisiertes PnL",
+        "gridPos": { "x": 18, "y": 0, "w": 6, "h": 4 },
+        "datasource": { "type": "grafana-postgresql-datasource", "uid": "supabase-postgres" },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "currencyEUR",
+            "decimals": 2,
+            "color": { "mode": "thresholds" },
+            "thresholds": { "steps": [
+              { "color": "red", "value": -99999 },
+              { "color": "green", "value": 0 }
+            ]},
+            "mappings": []
+          }
+        },
+        "options": {
+          "reduceOptions": { "calcs": ["lastNotNull"] },
+          "textMode": "auto",
+          "colorMode": "background",
+          "graphMode": "none"
+        },
+        "targets": [{
+          "datasource": { "uid": "supabase-postgres" },
+          "rawSql": "SELECT NOW() as time, COALESCE(SUM(unrealized_pnl), 0) as value FROM portfolio_positions WHERE closed_at IS NULL",
+          "format": "time_series",
+          "refId": "A"
+        }]
+      },
+      {
+        "id": 6,
+        "type": "table",
+        "title": "Aktuelle Positionen",
+        "gridPos": { "x": 0, "y": 4, "w": 24, "h": 10 },
+        "datasource": { "type": "grafana-postgresql-datasource", "uid": "supabase-postgres" },
+        "fieldConfig": {
+          "defaults": {
+            "color": { "mode": "thresholds" },
+            "thresholds": { "steps": [
+              { "color": "green", "value": null }
+            ]},
+            "custom": {
+              "align": "center",
+              "displayMode": "auto"
+            }
+          },
+          "overrides": [
+            {
+              "matcher": { "id": "byName", "options": "unrealized_pnl" },
+              "properties": [
+                { "id": "displayName", "value": "Unreal. PnL (€)" },
+                { "id": "unit", "value": "currencyEUR" },
+                { "id": "decimals", "value": 2 },
+                { "id": "custom", "value": { "displayMode": "color-background-solid", "align": "center" } },
+                { "id": "color", "value": { "mode": "thresholds" } },
+                { "id": "thresholds", "value": { "steps": [
+                  { "color": "red", "value": -99999 },
+                  { "color": "green", "value": 0 }
+                ]}}
+              ]
+            },
+            {
+              "matcher": { "id": "byName", "options": "unrealized_pnl_pct" },
+              "properties": [
+                { "id": "displayName", "value": "Unreal. PnL %" },
+                { "id": "unit", "value": "percent" },
+                { "id": "decimals", "value": 2 },
+                { "id": "custom", "value": { "displayMode": "color-background-solid", "align": "center" } },
+                { "id": "color", "value": { "mode": "thresholds" } },
+                { "id": "thresholds", "value": { "steps": [
+                  { "color": "red", "value": -99999 },
+                  { "color": "green", "value": 0 }
+                ]}}
+              ]
+            },
+            {
+              "matcher": { "id": "byName", "options": "current_price" },
+              "properties": [
+                { "id": "displayName", "value": "Kurs ($)" },
+                { "id": "unit", "value": "currencyUSD" },
+                { "id": "decimals", "value": 2 }
+              ]
+            },
+            {
+              "matcher": { "id": "byName", "options": "avg_cost" },
+              "properties": [
+                { "id": "displayName", "value": "Einkaufspreis ($)" },
+                { "id": "unit", "value": "currencyUSD" },
+                { "id": "decimals", "value": 2 }
+              ]
+            },
+            {
+              "matcher": { "id": "byName", "options": "symbol" },
+              "properties": [
+                { "id": "displayName", "value": "Aktie" },
+                { "id": "custom", "value": { "width": 80 } }
+              ]
+            },
+            {
+              "matcher": { "id": "byName", "options": "side" },
+              "properties": [
+                { "id": "displayName", "value": "Richtung" },
+                { "id": "custom", "value": { "width": 80 } }
+              ]
+            },
+            {
+              "matcher": { "id": "byName", "options": "qty" },
+              "properties": [
+                { "id": "displayName", "value": "Anzahl" },
+                { "id": "custom", "value": { "width": 80 } }
+              ]
+            },
+            {
+              "matcher": { "id": "byName", "options": "opened_at" },
+              "properties": [
+                { "id": "displayName", "value": "Geöffnet" },
+                { "id": "unit", "value": "dateTimeAsLocal" }
+              ]
+            },
+            {
+              "matcher": { "id": "byName", "options": "stop_loss" },
+              "properties": [
+                { "id": "displayName", "value": "Stop Loss" },
+                { "id": "unit", "value": "currencyUSD" },
+                { "id": "decimals", "value": 2 }
+              ]
+            },
+            {
+              "matcher": { "id": "byName", "options": "take_profit" },
+              "properties": [
+                { "id": "displayName", "value": "Take Profit" },
+                { "id": "unit", "value": "currencyUSD" },
+                { "id": "decimals", "value": 2 }
+              ]
+            }
+          ]
+        },
+        "options": {
+          "showHeader": true,
+          "sortBy": [{ "displayName": "Unreal. PnL (€)", "desc": false }],
+          "footer": { "show": false }
+        },
+        "targets": [{
+          "datasource": { "uid": "supabase-postgres" },
+          "rawSql": "SELECT symbol, side, qty, avg_cost, current_price, ROUND((unrealized_pnl)::numeric, 2) as unrealized_pnl, ROUND((unrealized_pnl_pct * 100)::numeric, 2) as unrealized_pnl_pct, stop_loss, take_profit, opened_at FROM portfolio_positions WHERE closed_at IS NULL ORDER BY unrealized_pnl ASC",
+          "format": "table",
+          "refId": "A"
+        }]
+      },
+      {
+        "id": 7,
+        "type": "barchart",
+        "title": "PnL pro Position",
+        "gridPos": { "x": 0, "y": 14, "w": 12, "h": 8 },
+        "datasource": { "type": "grafana-postgresql-datasource", "uid": "supabase-postgres" },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "currencyEUR",
+            "color": { "mode": "fixed", "fixedColor": "blue" }
+          },
+          "overrides": []
+        },
+        "options": {
+          "xField": "symbol",
+          "orientation": "horizontal",
+          "groupWidth": 0.7,
+          "barWidth": 0.8,
+          "legend": { "displayMode": "hidden" },
+          "tooltip": { "mode": "single" }
+        },
+        "targets": [{
+          "datasource": { "uid": "supabase-postgres" },
+          "rawSql": "SELECT symbol, ROUND((unrealized_pnl)::numeric, 2) as pnl FROM portfolio_positions WHERE closed_at IS NULL ORDER BY unrealized_pnl ASC",
+          "format": "table",
+          "refId": "A"
+        }]
+      },
+      {
+        "id": 8,
+        "type": "barchart",
+        "title": "Positionsgrösse (Anzahl Aktien)",
+        "gridPos": { "x": 12, "y": 14, "w": 12, "h": 8 },
+        "datasource": { "type": "grafana-postgresql-datasource", "uid": "supabase-postgres" },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short",
+            "color": { "mode": "fixed", "fixedColor": "blue" }
+          },
+          "overrides": []
+        },
+        "options": {
+          "xField": "symbol",
+          "orientation": "horizontal",
+          "groupWidth": 0.7,
+          "barWidth": 0.8,
+          "legend": { "displayMode": "hidden" },
+          "tooltip": { "mode": "single" }
+        },
+        "targets": [{
+          "datasource": { "uid": "supabase-postgres" },
+          "rawSql": "SELECT symbol, qty::int as anzahl FROM portfolio_positions WHERE closed_at IS NULL ORDER BY qty DESC",
+          "format": "table",
+          "refId": "A"
+        }]
+      },
+      {
+        "id": 9,
+        "type": "table",
+        "title": "Letzte 10 abgeschlossene Trades",
+        "gridPos": { "x": 0, "y": 22, "w": 24, "h": 8 },
+        "datasource": { "type": "grafana-postgresql-datasource", "uid": "supabase-postgres" },
+        "fieldConfig": {
+          "defaults": {
+            "color": { "mode": "thresholds" },
+            "thresholds": { "steps": [{ "color": "green", "value": null }] },
+            "custom": { "align": "center", "displayMode": "auto" }
+          },
+          "overrides": [
+            {
+              "matcher": { "id": "byName", "options": "pnl_pct" },
+              "properties": [
+                { "id": "displayName", "value": "PnL %" },
+                { "id": "unit", "value": "percent" },
+                { "id": "decimals", "value": 2 },
+                { "id": "custom", "value": { "displayMode": "color-background-solid", "align": "center" } },
+                { "id": "color", "value": { "mode": "thresholds" } },
+                { "id": "thresholds", "value": { "steps": [
+                  { "color": "red", "value": -99 },
+                  { "color": "green", "value": 0 }
+                ]}}
+              ]
+            },
+            {
+              "matcher": { "id": "byName", "options": "hit" },
+              "properties": [
+                { "id": "displayName", "value": "TP/SL" },
+                { "id": "mappings", "value": [
+                  { "type": "value", "options": { "true": { "text": "✅ TP", "color": "green" }, "false": { "text": "🔴 SL", "color": "red" } } }
+                ]},
+                { "id": "custom", "value": { "displayMode": "color-text", "align": "center" } }
+              ]
+            },
+            {
+              "matcher": { "id": "byName", "options": "fill_price" },
+              "properties": [
+                { "id": "displayName", "value": "Einstieg ($)" },
+                { "id": "unit", "value": "currencyUSD" }
+              ]
+            },
+            {
+              "matcher": { "id": "byName", "options": "closed_at" },
+              "properties": [
+                { "id": "displayName", "value": "Geschlossen" },
+                { "id": "unit", "value": "dateTimeAsLocal" }
+              ]
+            },
+            {
+              "matcher": { "id": "byName", "options": "symbol" },
+              "properties": [{ "id": "displayName", "value": "Aktie" }]
+            },
+            {
+              "matcher": { "id": "byName", "options": "side" },
+              "properties": [{ "id": "displayName", "value": "Richtung" }]
+            },
+            {
+              "matcher": { "id": "byName", "options": "category" },
+              "properties": [{ "id": "displayName", "value": "Signal" }]
+            },
+            {
+              "matcher": { "id": "byName", "options": "regime" },
+              "properties": [{ "id": "displayName", "value": "Markt" }]
+            }
+          ]
+        },
+        "options": {
+          "showHeader": true,
+          "footer": { "show": false }
+        },
+        "targets": [{
+          "datasource": { "uid": "supabase-postgres" },
+          "rawSql": "SELECT symbol, side, ROUND((fill_price)::numeric, 2) as fill_price, ROUND((pnl_pct * 100)::numeric, 2) as pnl_pct, hit, category, regime, closed_at FROM trades WHERE closed_at IS NOT NULL ORDER BY closed_at DESC LIMIT 10",
+          "format": "table",
+          "refId": "A"
+        }]
+      }
+    ]
+  },
+  "folderId": 0,
+  "overwrite": true
+}
