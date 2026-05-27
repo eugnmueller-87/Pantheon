@@ -36,6 +36,8 @@ class PositionSnapshot:
     current_price:       float
     unrealized_pnl:      float
     unrealized_pnl_pct:  float
+    stop_loss_price:     Optional[float] = None
+    take_profit_price:   Optional[float] = None
 
 
 @dataclass
@@ -122,8 +124,16 @@ class ArgusAgent:
     def portfolio_state(self) -> PortfolioState:
         return self._state
 
-    def add_mock_position(self, symbol: str, side: str, qty: float,
-                          avg_cost: float, current_price: float) -> None:
+    def add_mock_position(
+        self,
+        symbol: str,
+        side: str,
+        qty: float,
+        avg_cost: float,
+        current_price: float,
+        stop_loss_price: Optional[float] = None,
+        take_profit_price: Optional[float] = None,
+    ) -> None:
         """Register a simulated trade into in-memory state (mock mode only)."""
         if not self._mock:
             return
@@ -135,6 +145,8 @@ class ArgusAgent:
             symbol=symbol, side=side, qty=qty,
             avg_cost=avg_cost, current_price=current_price,
             unrealized_pnl=unrealized_pnl, unrealized_pnl_pct=unrealized_pnl_pct,
+            stop_loss_price=stop_loss_price,
+            take_profit_price=take_profit_price,
         ))
         logger.info("[ARGUS] Mock position added: %s %s x%.0f @ %.4f", side, symbol, qty, avg_cost)
         if _USE_SUPABASE:
@@ -170,6 +182,11 @@ class ArgusAgent:
             logger.info("[ARGUS] Alert (no Telegram): %s", message)
 
     def _build_state(self, ib) -> PortfolioState:
+        from config.settings import load_settings
+        cfg = load_settings()
+        sl_pct = cfg.get("stop_loss_pct", 0.03)
+        tp_pct = cfg.get("take_profit_pct", 0.06)
+
         equity = self._default_equity
         for av in ib.accountValues():
             if av.tag == "NetLiquidationByCurrency" and av.currency == "BASE":
@@ -184,14 +201,19 @@ class ArgusAgent:
             qty = abs(pos.position)
             denom = qty * cost
             unrealized_pnl_pct = pos.unrealizedPNL / denom if denom != 0 else 0.0
+            is_long = pos.position > 0
+            sl_price = round(cost * (1 - sl_pct if is_long else 1 + sl_pct), 4)
+            tp_price = round(cost * (1 + tp_pct if is_long else 1 - tp_pct), 4)
             snapshots.append(PositionSnapshot(
                 symbol             = pos.contract.symbol,
-                side               = "LONG" if pos.position > 0 else "SHORT",
+                side               = "LONG" if is_long else "SHORT",
                 qty                = qty,
                 avg_cost           = cost,
                 current_price      = pos.marketPrice,
                 unrealized_pnl     = pos.unrealizedPNL,
                 unrealized_pnl_pct = unrealized_pnl_pct,
+                stop_loss_price    = sl_price,
+                take_profit_price  = tp_price,
             ))
 
         peak = max(self._state.peak_equity, equity)
@@ -233,6 +255,8 @@ class ArgusAgent:
                         "current_price":      s.current_price,
                         "unrealized_pnl":     s.unrealized_pnl,
                         "unrealized_pnl_pct": s.unrealized_pnl_pct,
+                        "stop_loss":          s.stop_loss_price,
+                        "take_profit":        s.take_profit_price,
                         "refreshed_at":       self._state.refreshed_at.isoformat(),
                     }
                     for s in self._state.snapshots

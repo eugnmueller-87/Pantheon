@@ -525,6 +525,8 @@ class ZeusOrchestrator:
                     symbol=result.symbol, side=pos_side,
                     qty=result.qty, avg_cost=result.fill_price,
                     current_price=result.fill_price,
+                    stop_loss_price=result.stop_loss_price,
+                    take_profit_price=result.take_profit_price,
                 )
 
         # Feed outcome back to Pattern + KB
