@@ -110,11 +110,14 @@ def update_trade_pnl(order_id: str, pnl_pct: float, hit: bool, closed_at: dateti
 # ── Portfolio state ────────────────────────────────────────────────────────────
 
 def upsert_portfolio_state(state: dict) -> None:
-    """Overwrite the single portfolio state row. Called every Argus refresh."""
+    """Append a portfolio equity snapshot row (time-series, not a singleton).
+    Called every Argus refresh — each call writes a new row so Grafana can
+    plot the equity curve over time.
+    """
     try:
-        get_client().table("portfolio_state").upsert(
-            {**state, "state_id": "singleton"}, on_conflict="state_id"
-        ).execute()
+        # Remove any stale singleton key from old code
+        row = {k: v for k, v in state.items() if k != "state_id"}
+        get_client().table("portfolio_state").insert(row).execute()
     except Exception as exc:
         logger.error("[SUPABASE] upsert_portfolio_state failed: %s", exc)
 
