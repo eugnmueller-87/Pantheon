@@ -1,0 +1,318 @@
+{
+  "dashboard": {
+    "id": null,
+    "uid": "pantheon-time-metrics",
+    "title": "Pantheon OS — Time Metrics",
+    "tags": ["pantheon", "trading"],
+    "timezone": "Europe/Berlin",
+    "schemaVersion": 38,
+    "version": 6,
+    "refresh": "1m",
+    "time": { "from": "now-30d", "to": "now" },
+    "panels": [
+      {
+        "id": 1,
+        "type": "stat",
+        "title": "Win Rate — Intraday",
+        "gridPos": { "x": 0, "y": 0, "w": 4, "h": 4 },
+        "datasource": { "type": "grafana-postgresql-datasource", "uid": "supabase-postgres" },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent",
+            "color": { "mode": "thresholds" },
+            "thresholds": { "steps": [
+              { "color": "red", "value": 0 },
+              { "color": "yellow", "value": 40 },
+              { "color": "green", "value": 55 }
+            ]},
+            "mappings": []
+          }
+        },
+        "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "auto", "colorMode": "background" },
+        "targets": [{
+          "datasource": { "uid": "supabase-postgres" },
+          "rawSql": "SELECT NOW() as time, ROUND(100.0 * SUM(CASE WHEN hit = true THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 1) as value FROM trades WHERE closed_at IS NOT NULL AND EXTRACT(EPOCH FROM (closed_at - recorded_at)) < 86400",
+          "format": "time_series",
+          "refId": "A"
+        }]
+      },
+      {
+        "id": 2,
+        "type": "stat",
+        "title": "Win Rate — Multiday",
+        "gridPos": { "x": 4, "y": 0, "w": 4, "h": 4 },
+        "datasource": { "type": "grafana-postgresql-datasource", "uid": "supabase-postgres" },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent",
+            "color": { "mode": "thresholds" },
+            "thresholds": { "steps": [
+              { "color": "red", "value": 0 },
+              { "color": "yellow", "value": 40 },
+              { "color": "green", "value": 55 }
+            ]},
+            "mappings": []
+          }
+        },
+        "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "auto", "colorMode": "background" },
+        "targets": [{
+          "datasource": { "uid": "supabase-postgres" },
+          "rawSql": "SELECT NOW() as time, ROUND(100.0 * SUM(CASE WHEN hit = true THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 1) as value FROM trades WHERE closed_at IS NOT NULL AND EXTRACT(EPOCH FROM (closed_at - recorded_at)) >= 86400",
+          "format": "time_series",
+          "refId": "A"
+        }]
+      },
+      {
+        "id": 3,
+        "type": "stat",
+        "title": "Avg Hold Time — Wins",
+        "gridPos": { "x": 8, "y": 0, "w": 4, "h": 4 },
+        "datasource": { "type": "grafana-postgresql-datasource", "uid": "supabase-postgres" },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "s",
+            "color": { "mode": "fixed", "fixedColor": "blue" },
+            "mappings": []
+          }
+        },
+        "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "auto", "colorMode": "background" },
+        "targets": [{
+          "datasource": { "uid": "supabase-postgres" },
+          "rawSql": "SELECT NOW() as time, COALESCE(EXTRACT(EPOCH FROM AVG(closed_at - recorded_at)), 0) as value FROM trades WHERE closed_at IS NOT NULL AND hit = true",
+          "format": "time_series",
+          "refId": "A"
+        }]
+      },
+      {
+        "id": 4,
+        "type": "stat",
+        "title": "Avg Hold Time — Losses",
+        "gridPos": { "x": 12, "y": 0, "w": 4, "h": 4 },
+        "datasource": { "type": "grafana-postgresql-datasource", "uid": "supabase-postgres" },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "s",
+            "color": { "mode": "fixed", "fixedColor": "red" },
+            "mappings": []
+          }
+        },
+        "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "auto", "colorMode": "background" },
+        "targets": [{
+          "datasource": { "uid": "supabase-postgres" },
+          "rawSql": "SELECT NOW() as time, COALESCE(EXTRACT(EPOCH FROM AVG(closed_at - recorded_at)), 0) as value FROM trades WHERE closed_at IS NOT NULL AND hit = false",
+          "format": "time_series",
+          "refId": "A"
+        }]
+      },
+      {
+        "id": 5,
+        "type": "stat",
+        "title": "Avg Hold Time — Longs",
+        "gridPos": { "x": 16, "y": 0, "w": 4, "h": 4 },
+        "datasource": { "type": "grafana-postgresql-datasource", "uid": "supabase-postgres" },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "s",
+            "color": { "mode": "fixed", "fixedColor": "blue" },
+            "mappings": []
+          }
+        },
+        "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "auto", "colorMode": "background" },
+        "targets": [{
+          "datasource": { "uid": "supabase-postgres" },
+          "rawSql": "SELECT NOW() as time, COALESCE(EXTRACT(EPOCH FROM AVG(closed_at - recorded_at)), 0) as value FROM trades WHERE closed_at IS NOT NULL AND side = 'BUY'",
+          "format": "time_series",
+          "refId": "A"
+        }]
+      },
+      {
+        "id": 6,
+        "type": "stat",
+        "title": "Avg Hold Time — Shorts",
+        "gridPos": { "x": 20, "y": 0, "w": 4, "h": 4 },
+        "datasource": { "type": "grafana-postgresql-datasource", "uid": "supabase-postgres" },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "s",
+            "color": { "mode": "fixed", "fixedColor": "orange" },
+            "mappings": []
+          }
+        },
+        "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "textMode": "auto", "colorMode": "background" },
+        "targets": [{
+          "datasource": { "uid": "supabase-postgres" },
+          "rawSql": "SELECT NOW() as time, COALESCE(EXTRACT(EPOCH FROM AVG(closed_at - recorded_at)), 0) as value FROM trades WHERE closed_at IS NOT NULL AND side = 'SELL'",
+          "format": "time_series",
+          "refId": "A"
+        }]
+      },
+      {
+        "id": 7,
+        "type": "barchart",
+        "title": "PnL by Day of Week",
+        "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
+        "datasource": { "type": "grafana-postgresql-datasource", "uid": "supabase-postgres" },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent",
+            "color": { "mode": "fixed", "fixedColor": "blue" }
+          },
+          "overrides": []
+        },
+        "options": {
+          "xField": "day",
+          "orientation": "auto",
+          "groupWidth": 0.7,
+          "barWidth": 0.97,
+          "legend": { "displayMode": "hidden" },
+          "tooltip": { "mode": "single" }
+        },
+        "targets": [{
+          "datasource": { "uid": "supabase-postgres" },
+          "rawSql": "SELECT TO_CHAR(recorded_at AT TIME ZONE 'Europe/Berlin', 'Dy') as day, ROUND(AVG(pnl_pct)::numeric * 100, 2) as avg_pnl FROM trades WHERE closed_at IS NOT NULL AND pnl_pct IS NOT NULL GROUP BY day, EXTRACT(DOW FROM recorded_at AT TIME ZONE 'Europe/Berlin') ORDER BY CASE EXTRACT(DOW FROM recorded_at AT TIME ZONE 'Europe/Berlin') WHEN 1 THEN 1 WHEN 2 THEN 2 WHEN 3 THEN 3 WHEN 4 THEN 4 WHEN 5 THEN 5 WHEN 6 THEN 6 WHEN 0 THEN 7 END",
+          "format": "table",
+          "refId": "A"
+        }]
+      },
+      {
+        "id": 8,
+        "type": "barchart",
+        "title": "Number of Trades by Day of Week",
+        "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 },
+        "datasource": { "type": "grafana-postgresql-datasource", "uid": "supabase-postgres" },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short",
+            "color": { "mode": "fixed", "fixedColor": "blue" }
+          }
+        },
+        "options": {
+          "xField": "day",
+          "orientation": "auto",
+          "groupWidth": 0.7,
+          "barWidth": 0.97,
+          "legend": { "displayMode": "hidden" },
+          "tooltip": { "mode": "single" }
+        },
+        "targets": [{
+          "datasource": { "uid": "supabase-postgres" },
+          "rawSql": "SELECT TO_CHAR(recorded_at AT TIME ZONE 'Europe/Berlin', 'Dy') as day, COUNT(*) as trades FROM trades WHERE closed_at IS NOT NULL GROUP BY day, EXTRACT(DOW FROM recorded_at AT TIME ZONE 'Europe/Berlin') ORDER BY CASE EXTRACT(DOW FROM recorded_at AT TIME ZONE 'Europe/Berlin') WHEN 1 THEN 1 WHEN 2 THEN 2 WHEN 3 THEN 3 WHEN 4 THEN 4 WHEN 5 THEN 5 WHEN 6 THEN 6 WHEN 0 THEN 7 END",
+          "format": "table",
+          "refId": "A"
+        }]
+      },
+      {
+        "id": 9,
+        "type": "barchart",
+        "title": "PnL by Hour of Day (Berlin)",
+        "gridPos": { "x": 0, "y": 12, "w": 12, "h": 8 },
+        "datasource": { "type": "grafana-postgresql-datasource", "uid": "supabase-postgres" },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent",
+            "color": { "mode": "fixed", "fixedColor": "blue" }
+          },
+          "overrides": []
+        },
+        "options": {
+          "xField": "hour_bucket",
+          "orientation": "auto",
+          "groupWidth": 0.7,
+          "barWidth": 0.97,
+          "legend": { "displayMode": "hidden" },
+          "tooltip": { "mode": "single" }
+        },
+        "targets": [{
+          "datasource": { "uid": "supabase-postgres" },
+          "rawSql": "SELECT (FLOOR(EXTRACT(HOUR FROM recorded_at AT TIME ZONE 'Europe/Berlin') / 3) * 3)::int || '-' || (FLOOR(EXTRACT(HOUR FROM recorded_at AT TIME ZONE 'Europe/Berlin') / 3) * 3 + 3)::int as hour_bucket, ROUND(AVG(pnl_pct)::numeric * 100, 2) as avg_pnl FROM trades WHERE closed_at IS NOT NULL AND pnl_pct IS NOT NULL GROUP BY hour_bucket, FLOOR(EXTRACT(HOUR FROM recorded_at AT TIME ZONE 'Europe/Berlin') / 3) ORDER BY FLOOR(EXTRACT(HOUR FROM recorded_at AT TIME ZONE 'Europe/Berlin') / 3)",
+          "format": "table",
+          "refId": "A"
+        }]
+      },
+      {
+        "id": 10,
+        "type": "barchart",
+        "title": "Number of Trades by Hour of Day (Berlin)",
+        "gridPos": { "x": 12, "y": 12, "w": 12, "h": 8 },
+        "datasource": { "type": "grafana-postgresql-datasource", "uid": "supabase-postgres" },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "short",
+            "color": { "mode": "fixed", "fixedColor": "blue" }
+          }
+        },
+        "options": {
+          "xField": "hour_bucket",
+          "orientation": "auto",
+          "groupWidth": 0.7,
+          "barWidth": 0.97,
+          "legend": { "displayMode": "hidden" },
+          "tooltip": { "mode": "single" }
+        },
+        "targets": [{
+          "datasource": { "uid": "supabase-postgres" },
+          "rawSql": "SELECT (FLOOR(EXTRACT(HOUR FROM recorded_at AT TIME ZONE 'Europe/Berlin') / 3) * 3)::int || '-' || (FLOOR(EXTRACT(HOUR FROM recorded_at AT TIME ZONE 'Europe/Berlin') / 3) * 3 + 3)::int as hour_bucket, COUNT(*) as trades FROM trades WHERE closed_at IS NOT NULL GROUP BY hour_bucket, FLOOR(EXTRACT(HOUR FROM recorded_at AT TIME ZONE 'Europe/Berlin') / 3) ORDER BY FLOOR(EXTRACT(HOUR FROM recorded_at AT TIME ZONE 'Europe/Berlin') / 3)",
+          "format": "table",
+          "refId": "A"
+        }]
+      },
+      {
+        "id": 11,
+        "type": "barchart",
+        "title": "PnL by Signal Category",
+        "gridPos": { "x": 0, "y": 20, "w": 12, "h": 8 },
+        "datasource": { "type": "grafana-postgresql-datasource", "uid": "supabase-postgres" },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent",
+            "color": { "mode": "fixed", "fixedColor": "blue" }
+          },
+          "overrides": []
+        },
+        "options": {
+          "xField": "category",
+          "orientation": "horizontal",
+          "groupWidth": 0.7,
+          "barWidth": 0.97,
+          "legend": { "displayMode": "hidden" },
+          "tooltip": { "mode": "single" }
+        },
+        "targets": [{
+          "datasource": { "uid": "supabase-postgres" },
+          "rawSql": "SELECT category::text, ROUND(AVG(pnl_pct)::numeric * 100, 2) as avg_pnl FROM trades WHERE closed_at IS NOT NULL AND pnl_pct IS NOT NULL GROUP BY category ORDER BY avg_pnl DESC",
+          "format": "table",
+          "refId": "A"
+        }]
+      },
+      {
+        "id": 12,
+        "type": "barchart",
+        "title": "Win Rate by Signal Category",
+        "gridPos": { "x": 12, "y": 20, "w": 12, "h": 8 },
+        "datasource": { "type": "grafana-postgresql-datasource", "uid": "supabase-postgres" },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "percent",
+            "color": { "mode": "fixed", "fixedColor": "blue" }
+          }
+        },
+        "options": {
+          "xField": "category",
+          "orientation": "horizontal",
+          "groupWidth": 0.7,
+          "barWidth": 0.97,
+          "legend": { "displayMode": "hidden" },
+          "tooltip": { "mode": "single" }
+        },
+        "targets": [{
+          "datasource": { "uid": "supabase-postgres" },
+          "rawSql": "SELECT category::text, ROUND(100.0 * SUM(CASE WHEN hit = true THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 1) as win_rate FROM trades WHERE closed_at IS NOT NULL GROUP BY category ORDER BY win_rate DESC",
+          "format": "table",
+          "refId": "A"
+        }]
+      }
+    ]
+  },
+  "folderId": 0,
+  "overwrite": true
+}
