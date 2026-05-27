@@ -59,6 +59,7 @@ class ArgusAgent:
         default_account_equity: float                          = 100_000.0,
         ib_host:                str                            = "ibgateway",
         ib_port:                int                            = 4004,  # socat bridge (4004→127.0.0.1:4002)
+        mock:                   bool                           = False,  # skip IB, track positions in-memory only
     ):
         self.max_drawdown_pct  = max_drawdown_pct
         self._on_kill          = on_kill
@@ -70,6 +71,7 @@ class ArgusAgent:
         self._ib               = None
         self._ib_host          = ib_host
         self._ib_port          = ib_port
+        self._mock             = mock
         self._milestone        = milestone_manager
         self._default_equity   = default_account_equity
         self.kb                = AgentKnowledgeBase("argus")
@@ -83,12 +85,16 @@ class ArgusAgent:
         return AgentHealth.HEALTHY
 
     def refresh(self) -> PortfolioState:
-        try:
-            ib           = self._get_connection()
-            self._state  = self._build_state(ib)
-        except Exception as exc:
-            logger.warning("[ARGUS] Refresh failed (no IB?): %s", exc)
-            return self._state
+        if self._mock:
+            # Mock mode — no IB connection, keep in-memory state as-is
+            logger.debug("[ARGUS] Mock mode — skipping IB refresh, using in-memory state")
+        else:
+            try:
+                ib           = self._get_connection()
+                self._state  = self._build_state(ib)
+            except Exception as exc:
+                logger.warning("[ARGUS] Refresh failed (no IB?): %s", exc)
+                return self._state
 
         # Update milestone — adjusts risk params + fires vault alert if crossed
         if self._milestone:
@@ -115,6 +121,33 @@ class ArgusAgent:
 
     def portfolio_state(self) -> PortfolioState:
         return self._state
+
+    def add_mock_position(self, symbol: str, side: str, qty: float,
+                          avg_cost: float, current_price: float) -> None:
+        """Register a simulated trade into in-memory state (mock mode only)."""
+        if not self._mock:
+            return
+        unrealized_pnl = qty * (current_price - avg_cost) * (1 if side == "LONG" else -1)
+        unrealized_pnl_pct = unrealized_pnl / (qty * avg_cost) if avg_cost else 0.0
+        # Remove existing position for same symbol if present
+        self._state.snapshots = [s for s in self._state.snapshots if s.symbol != symbol]
+        self._state.snapshots.append(PositionSnapshot(
+            symbol=symbol, side=side, qty=qty,
+            avg_cost=avg_cost, current_price=current_price,
+            unrealized_pnl=unrealized_pnl, unrealized_pnl_pct=unrealized_pnl_pct,
+        ))
+        logger.info("[ARGUS] Mock position added: %s %s x%.0f @ %.4f", side, symbol, qty, avg_cost)
+        if _USE_SUPABASE:
+            self._persist_to_supabase()
+
+    def remove_mock_position(self, symbol: str) -> None:
+        """Remove a closed simulated position (mock mode only)."""
+        if not self._mock:
+            return
+        self._state.snapshots = [s for s in self._state.snapshots if s.symbol != symbol]
+        logger.info("[ARGUS] Mock position removed: %s", symbol)
+        if _USE_SUPABASE:
+            self._persist_to_supabase()
 
     def send_alert(self, message: str) -> None:
         # External alert_fn first (used by Watchdog)

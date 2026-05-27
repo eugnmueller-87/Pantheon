@@ -148,6 +148,7 @@ class ZeusOrchestrator:
             default_account_equity=self.config.default_account_equity,
             ib_host=os.getenv("IB_HOST", "ibgateway"),
             ib_port=int(os.getenv("IB_PORT", "4004")),
+            mock=self.config.mock_execution,  # mirror mock_execution — no IB in mock mode
         )
 
         # Shadow learning layer — wire KB into Argus's OutcomeResolver
@@ -515,6 +516,14 @@ class ZeusOrchestrator:
                 "sector": sized.category.value,
                 "supplier": sized.supplier,
             })
+            # In mock mode: register position with Argus immediately (no IB poll needed)
+            if self.config.mock_execution and result.fill_price and result.qty:
+                pos_side = "LONG" if result.side == "BUY" else "SHORT"
+                self.argus.add_mock_position(
+                    symbol=result.symbol, side=pos_side,
+                    qty=result.qty, avg_cost=result.fill_price,
+                    current_price=result.fill_price,
+                )
 
         # Feed outcome back to Pattern + KB
         self.cb.call("pythia", fn=lambda: self.pythia.record_trade(sized, result), fallback=None)
