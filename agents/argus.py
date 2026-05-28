@@ -198,7 +198,7 @@ class ArgusAgent:
         """
         try:
             import core.supabase_client as supa
-            rows = supa.client.table("portfolio_positions") \
+            rows = supa.get_client().table("portfolio_positions") \
                 .select("qty,avg_cost,current_price,side") \
                 .is_("closed_at", "null") \
                 .execute()
