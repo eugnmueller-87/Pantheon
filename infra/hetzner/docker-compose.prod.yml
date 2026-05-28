@@ -13,12 +13,13 @@
 services:
 
   # ── IB Gateway (headless paper trading) ────────────────────────
-  # gnzsnz/ib-gateway:stable — IBC automates GUI login via env vars.
+  # ghcr.io/gnzsnz/ib-gateway:10.30 — pinned version (stable tag broke 2026-05-28:
+  # TWS 10.45.1g jars missing from image). Update version only after testing.
   # EXISTING_SESSION_DETECTED_ACTION=primary: dismisses any pre-existing
   # IBKR session so headless login always succeeds unattended.
   # Paper port 4002 is internal only — Ares/Argus connect via service name.
   ibgateway:
-    image: gnzsnz/ib-gateway:stable
+    image: ghcr.io/gnzsnz/ib-gateway:10.30
     container_name: pantheon_ibgateway
     restart: always
     environment:
@@ -29,12 +30,15 @@ services:
       - TWS_ACCEPT_INCOMING=accept
       - READ_ONLY_API=no
       - TZ=Europe/Berlin
+      - TWOFA_DEVICE=TOTP
+      - IBC_TOTP_SECRET=${IBC_TOTP_SECRET}
     ports:
       - "4002:4002"
     volumes:
       - ibgateway_config:/home/ibgateway
     healthcheck:
-      test: ["CMD-SHELL", "nc -z localhost 4002 || exit 1"]
+      # nc not available in gnzsnz image — use bash TCP redirect instead
+      test: ["CMD-SHELL", "bash -c '< /dev/tcp/localhost/4002' || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
