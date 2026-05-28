@@ -95,8 +95,16 @@ class ArgusAgent:
                 ib           = self._get_connection()
                 self._state  = self._build_state(ib)
             except Exception as exc:
-                logger.warning("[ARGUS] Refresh failed (no IB?): %s", exc)
-                return self._state
+                logger.warning("[ARGUS] IB refresh failed (%s) — falling back to Supabase equity", exc)
+                # Recompute equity from Supabase positions so the dashboard
+                # reflects real cash (starting_equity − cost_basis + market_value)
+                # rather than always showing the raw starting_equity figure.
+                fallback_equity = self._supabase_equity_fallback()
+                peak = max(self._state.peak_equity, fallback_equity)
+                drawdown = max(0.0, (peak - fallback_equity) / peak) if peak > 0 else 0.0
+                self._state.total_equity        = fallback_equity
+                self._state.peak_equity         = peak
+                self._state.current_drawdown_pct = drawdown
 
         # Update milestone — adjusts risk params + fires vault alert if crossed
         if self._milestone:
@@ -180,6 +188,33 @@ class ArgusAgent:
                 logger.warning("[ARGUS] Telegram failed: %s", exc)
         else:
             logger.info("[ARGUS] Alert (no Telegram): %s", message)
+
+    def _supabase_equity_fallback(self) -> float:
+        """
+        When IB is unreachable, compute equity from Supabase:
+          available_cash = starting_equity − sum(qty × avg_cost) for open positions
+          total_equity   = available_cash + sum(qty × current_price)
+        Falls back to self._default_equity if Supabase is also unavailable.
+        """
+        try:
+            import core.supabase_client as supa
+            rows = supa.client.table("portfolio_positions") \
+                .select("qty,avg_cost,current_price,side") \
+                .is_("closed_at", "null") \
+                .execute()
+            positions = rows.data or []
+            cost_basis   = sum(float(r["qty"]) * float(r["avg_cost"])    for r in positions)
+            market_value = sum(float(r["qty"]) * float(r["current_price"]) for r in positions)
+            available_cash = self._default_equity - cost_basis
+            total_equity   = available_cash + market_value
+            logger.debug(
+                "[ARGUS] Supabase equity fallback: cash=%.2f mktval=%.2f total=%.2f",
+                available_cash, market_value, total_equity,
+            )
+            return total_equity
+        except Exception as exc:
+            logger.warning("[ARGUS] Supabase equity fallback failed: %s", exc)
+            return self._default_equity
 
     def _build_state(self, ib) -> PortfolioState:
         from config.settings import load_settings
