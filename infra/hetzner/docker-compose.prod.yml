@@ -19,7 +19,7 @@ services:
   # IBKR session so headless login always succeeds unattended.
   # Paper port 4002 is internal only — Ares/Argus connect via service name.
   ibgateway:
-    image: ghcr.io/gnzsnz/ib-gateway:10.30
+    image: ghcr.io/gnzsnz/ib-gateway:latest
     container_name: pantheon_ibgateway
     restart: always
     environment:
