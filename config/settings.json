@@ -2,7 +2,7 @@
   "paper_trading": true,
   "mock_execution": false,
   "max_drawdown_pct": 0.08,
-  "max_open_positions": 10,
+  "max_open_positions": 3,
   "poll_interval_seconds": 900,
   "webhook_port": 8080,
   "ib_host": "pantheon_ibgateway",
@@ -11,6 +11,6 @@
   "hermes_base_url": "https://hermes-agent-production-114e.up.railway.app",
   "telegram_bot_token": "",
   "telegram_chat_id": "",
-  "default_account_equity": 100000.0,
-  "starting_equity": 100000.0
+  "default_account_equity": 4000.0,
+  "starting_equity": 4000.0
 }

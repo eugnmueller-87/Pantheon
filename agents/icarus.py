@@ -112,7 +112,21 @@ _DIVISION_PARENT_MAP: dict[str, str] = {
     "ServiceNow": "NOW",
     "Palantir AIP": "PLTR",
     "Snowflake Cortex": "SNOW",
+    # OpenAI is private — route to MSFT (largest listed beneficiary, ~49% stake)
+    "OpenAI": "MSFT",
 }
+
+# Private companies / non-tradeable tickers — drop signals cleanly before Apollo lookup.
+# These would otherwise resolve to phantom tickers (e.g. OPENAI-USD) and waste LLM calls.
+_PRIVATE_COMPANY_SUPPLIERS: frozenset[str] = frozenset({
+    "OpenAI",          # private — resolves to OPENAI-USD phantom ticker
+    "Anthropic",       # private
+    "xAI",             # private (Elon Musk's AI co)
+    "Mistral AI",      # private
+    "Cohere",          # private
+    "Stability AI",    # private
+    "Hugging Face",    # private
+})
 
 _UUID_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
@@ -211,6 +225,10 @@ def _map_signal(item: dict) -> Optional[RawSignal]:
         severity = Severity.CRITICAL
 
     supplier = item.get("supplier", "")
+    # Drop signals from private companies before they waste an LLM call
+    if supplier in _PRIVATE_COMPANY_SUPPLIERS:
+        logger.info("[ICARUS] Dropping private-company signal (%s): %s", supplier, item.get("title", "")[:60])
+        return None
     ticker   = _resolve_ticker(supplier)
     tickers  = [ticker] if ticker else []
 
