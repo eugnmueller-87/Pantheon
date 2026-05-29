@@ -20,6 +20,7 @@ import logging
 import os
 import threading
 import time
+from datetime import datetime, timezone, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from dotenv import load_dotenv
@@ -204,13 +205,39 @@ class ZeusHandler(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
 
+def _is_market_open() -> bool:
+    """
+    Returns True if the NYSE is currently open for regular trading.
+    Hours: Mon–Fri 09:30–16:00 ET (UTC-4 in summer, UTC-5 in winter).
+    Uses a simple UTC offset — no external dependency required.
+    """
+    # US Eastern: UTC-4 (EDT, Mar–Nov) or UTC-5 (EST, Nov–Mar)
+    now_utc = datetime.now(timezone.utc)
+    # Approximate EDT/EST switch: second Sunday of March / first Sunday of November
+    # Good enough for trading purposes — a few days of error at DST boundary is fine
+    month = now_utc.month
+    et_offset = -4 if 3 <= month <= 10 else -5
+    now_et = now_utc + timedelta(hours=et_offset)
+
+    # Weekend check
+    if now_et.weekday() >= 5:  # 5=Sat, 6=Sun
+        return False
+
+    # Regular session: 09:30–16:00 ET
+    open_time  = now_et.replace(hour=9,  minute=30, second=0, microsecond=0)
+    close_time = now_et.replace(hour=16, minute=0,  second=0, microsecond=0)
+    return open_time <= now_et < close_time
+
+
 def _auto_run_loop(interval_seconds: int):
     """Background thread: run the pipeline on a fixed schedule."""
     logger.info("[MAIN] Auto-run scheduler started — every %ds", interval_seconds)
     time.sleep(30)  # give Zeus time to fully initialise before first run
     while True:
         try:
-            if _zeus and _zeus.status.value != "halted":
+            if not _is_market_open():
+                logger.info("[MAIN] Auto-run skipped — market closed")
+            elif _zeus and _zeus.status.value != "halted":
                 if _run_lock.acquire(blocking=False):
                     try:
                         logger.info("[MAIN] Auto-run triggered")
