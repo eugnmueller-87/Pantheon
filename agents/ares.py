@@ -110,9 +110,9 @@ class AresAgent:
         )
 
     def _get_account_value(self, ib) -> float:
-        for av in ib.accountValues():
-            if av.tag == "NetLiquidationByCurrency" and av.currency == "BASE":
-                return float(av.value)
+        # Always use the configured equity cap — never the raw IBKR paper balance.
+        # IBKR paper accounts start at EUR 1M+ which would massively over-size positions.
+        # The configured default_account_equity (e.g. EUR 4,000) is the true risk budget.
         return self.default_account_equity
 
     def _get_connection(self):
