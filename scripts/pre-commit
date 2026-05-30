@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+# Pantheon OS - pre-commit security hook
+# Blocks commits that contain hardcoded credentials.
+# Install: bash scripts/install-hooks.sh
+
+set -euo pipefail
+
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+FAIL=0
+
+# Files staged for commit (tracked changes only)
+STAGED=$(git diff --cached --name-only --diff-filter=ACM 2>/dev/null || true)
+
+if [ -z "$STAGED" ]; then
+    exit 0
+fi
+
+# --- Pattern checks -----------------------------------------------------------
+
+check_pattern() {
+    local label="$1"
+    local pattern="$2"
+    # Exclude this hook file and SECURITY.md (they document the patterns)
+    local matches
+    matches=$(echo "$STAGED" | xargs grep -Il "$pattern" 2>/dev/null \
+        | grep -v "scripts/pre-commit" \
+        | grep -v "SECURITY.md" \
+        || true)
+    if [ -n "$matches" ]; then
+        echo -e "${RED}BLOCKED${NC}: Possible ${YELLOW}${label}${NC} found in:"
+        echo "$matches" | sed 's/^/  /'
+        FAIL=1
+    fi
+}
+
+# Anthropic API key
+check_pattern "Anthropic API key" "sk-ant-api"
+
+# Supabase service role key (new sb_ format)
+check_pattern "Supabase service_role key" "sb_secret_"
+
+# Supabase JWT (old eyJ format - still used by some SDKs)
+check_pattern "Supabase JWT (eyJ)" "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"
+
+# Upstash Redis token (AAIg base64 prefix)
+check_pattern "Upstash Redis token" "AAIgc"
+
+# Telegram bot token (numeric_id:AAH pattern)
+check_pattern "Telegram bot token" ":[A-Z][A-Z][A-Z][a-zA-Z0-9_-]\{30\}"
+
+# OpenAI key (might be used in future integrations)
+check_pattern "OpenAI API key" "sk-[a-zA-Z0-9]\{40,\}"
+
+# IB password - catch IB_PASSWORD= with a literal value (not a variable ref)
+if echo "$STAGED" | xargs grep -l 'IB_PASSWORD=[^${"]' 2>/dev/null \
+    | grep -v "scripts/pre-commit" \
+    | grep -v "SECURITY.md" \
+    | grep -q .; then
+    echo -e "${RED}BLOCKED${NC}: ${YELLOW}IB_PASSWORD${NC} with hardcoded value detected"
+    FAIL=1
+fi
+
+# TOTP secret - 32-char base32 in credential context
+if echo "$STAGED" | xargs grep -l "TOTP_SECRET=[A-Z2-7]\{20,\}" 2>/dev/null \
+    | grep -v "scripts/pre-commit" \
+    | grep -v "SECURITY.md" \
+    | grep -q .; then
+    echo -e "${RED}BLOCKED${NC}: ${YELLOW}TOTP_SECRET${NC} with hardcoded value detected"
+    FAIL=1
+fi
+
+# --- File checks --------------------------------------------------------------
+
+# Block committing real .env files (allow .env.example, .env.template)
+for f in $STAGED; do
+    basename_f=$(basename "$f")
+    if [ "$basename_f" = ".env" ]; then
+        echo -e "${RED}BLOCKED${NC}: Attempting to commit ${YELLOW}$f${NC} (real env file)"
+        FAIL=1
+    fi
+done
+
+# Block dashboard build artifacts
+for f in $STAGED; do
+    case "$f" in
+        dashboard/frontend/dist/*)
+            echo -e "${RED}BLOCKED${NC}: Attempting to commit build artifact ${YELLOW}$f${NC}"
+            echo "  Add 'dashboard/frontend/dist/' to .gitignore"
+            FAIL=1
+            ;;
+    esac
+done
+
+# --- Result -------------------------------------------------------------------
+
+if [ "$FAIL" -eq 1 ]; then
+    echo ""
+    echo -e "${RED}Commit blocked.${NC} Fix the issues above before committing."
+    echo "See SECURITY.md for credential management rules."
+    exit 1
+fi
+
+exit 0
