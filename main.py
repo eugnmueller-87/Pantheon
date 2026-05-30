@@ -104,6 +104,8 @@ class ZeusHandler(BaseHTTPRequestHandler):
             self._handle_halt()
         elif self.path == "/resume":
             self._handle_resume()
+        elif self.path == "/alert":
+            self._handle_alert()
         else:
             self._json_response(404, {"error": "not found"})
 
@@ -158,6 +160,27 @@ class ZeusHandler(BaseHTTPRequestHandler):
             self._json_response(200, {"status": "ok", "replay": summary})
         except Exception as exc:
             logger.exception("[MAIN] /run/replay failed")
+            self._json_response(500, {"error": str(exc)})
+
+    def _handle_alert(self):
+        """POST /alert — send a Telegram alert via Argus.
+        Body: {"message": "...", "source": "..."} (source is optional label)
+        Used by n8n VPS watchdog and any external monitor.
+        """
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(length)) if length else {}
+            message = body.get("message", "").strip()
+            source  = body.get("source", "external")
+            if not message:
+                self._json_response(400, {"error": "message field required"})
+                return
+            full_msg = f"[{source}] {message}"
+            _zeus.argus.send_alert(full_msg)
+            logger.info("[MAIN] /alert sent from %s: %s", source, message[:80])
+            self._json_response(200, {"status": "sent", "message": full_msg})
+        except Exception as exc:
+            logger.exception("[MAIN] /alert failed")
             self._json_response(500, {"error": str(exc)})
 
     def _handle_halt(self):
