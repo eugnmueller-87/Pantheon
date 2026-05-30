@@ -13,13 +13,14 @@
 services:
 
   # ── IB Gateway (headless paper trading) ────────────────────────
-  # ghcr.io/gnzsnz/ib-gateway:10.30 — pinned version (stable tag broke 2026-05-28:
-  # TWS 10.45.1g jars missing from image). Update version only after testing.
+  # ghcr.io/gnzsnz/ib-gateway:10.30 — pinned version (both stable + latest tags broken:
+  # latest claims 10.47.1c but jars folder is missing; 10.30 image has 10.30.1x jars confirmed working).
+  # Update version only after verifying jars exist: docker run --rm <image> ls /home/ibgateway/Jts/ibgateway/
   # EXISTING_SESSION_DETECTED_ACTION=primary: dismisses any pre-existing
   # IBKR session so headless login always succeeds unattended.
   # Paper port 4002 is internal only — Ares/Argus connect via service name.
   ibgateway:
-    image: ghcr.io/gnzsnz/ib-gateway:latest
+    image: ghcr.io/gnzsnz/ib-gateway:10.30
     container_name: pantheon_ibgateway
     restart: always
     environment:
