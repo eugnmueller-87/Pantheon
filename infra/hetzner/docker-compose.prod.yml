@@ -81,12 +81,13 @@ services:
     volumes:
       - zeus_knowledge:/app/knowledge
       - zeus_config:/app/config
+      - chroma_model_cache:/home/pantheon/.cache/chroma  # cache ONNX model — prevents 79MB re-download on every restart
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 20s
+      start_period: 120s  # ChromaDB model init can take 2+ min on cold start
     depends_on:
       - redis
       - kafka
@@ -105,12 +106,14 @@ services:
     env_file: .env
     environment:
       - TZ=Europe/Berlin
+    volumes:
+      - chroma_model_cache:/home/pantheon/.cache/chroma  # shared cache with zeus — model downloaded once
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8081/api/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 20s
+      start_period: 120s  # ChromaDB model init can take 2+ min on cold start
     networks:
       - pantheon
 
@@ -220,6 +223,7 @@ services:
 volumes:
   zeus_knowledge:
   zeus_config:
+  chroma_model_cache:  # ChromaDB ONNX embedding model — cached across restarts to prevent CPU spike on cold start
   grafana_data:
   redis_data:
   kafka_data:
