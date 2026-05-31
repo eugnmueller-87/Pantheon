@@ -33,7 +33,8 @@ services:
       - TZ=Europe/Berlin
       - TWOFA_DEVICE=TOTP
       - IBC_TOTP_SECRET=${IBC_TOTP_SECRET}
-      - CUSTOM_CONFIG=yes
+      - AUTO_RESTART_TIME=11:45 PM
+      - TWS_COLD_RESTART=06:00
     ports:
       - "4002:4002"
     volumes:
