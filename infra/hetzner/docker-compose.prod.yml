@@ -35,6 +35,7 @@ services:
       - IBC_TOTP_SECRET=${IBC_TOTP_SECRET}
       - AUTO_RESTART_TIME=11:45 PM
       - TWS_COLD_RESTART=06:00
+      - OVERRIDE_TWS_MASTER_CLIENT_ID=0
     ports:
       - "4002:4002"
     volumes:
