@@ -222,11 +222,11 @@ class ArgusAgent:
         sl_pct = cfg.get("stop_loss_pct", 0.03)
         tp_pct = cfg.get("take_profit_pct", 0.06)
 
+        # Always use the configured equity cap — never the raw IBKR paper balance.
+        # IBKR paper accounts start at USD 100k+ which would misrepresent our actual
+        # risk budget (default_account_equity, e.g. EUR 4,000).
+        # We track our own P&L from the configured starting capital, not IB's notional.
         equity = self._default_equity
-        for av in ib.accountValues():
-            if av.tag == "NetLiquidationByCurrency" and av.currency == "BASE":
-                equity = float(av.value)
-                break
 
         snapshots: list[PositionSnapshot] = []
         for pos in ib.portfolio():
@@ -303,7 +303,7 @@ class ArgusAgent:
     def _get_connection(self):
         import asyncio
         asyncio.set_event_loop(asyncio.new_event_loop())
-        from ib_insync import IB  # eventkit reads event loop at import time
+        from ib_async import IB
         if self._ib is not None:
             try:
                 self._ib.disconnect()

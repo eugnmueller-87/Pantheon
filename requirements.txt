@@ -7,8 +7,8 @@ anthropic>=0.40
 # Market data
 yfinance>=0.2
 
-# Interactive Brokers API (EU-compatible, German residents)
-ib_insync>=0.9.86
+# Interactive Brokers API — ib_async is the community successor to unmaintained ib_insync
+ib_async>=1.0.0
 
 # Vector DB for pattern learning (Phase 2)
 chromadb>=0.4

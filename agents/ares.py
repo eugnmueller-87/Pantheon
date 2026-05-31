@@ -1,7 +1,7 @@
 """
 Agent 5 — Ares: Trade Execution (Interactive Brokers)
 God of decisive action — executes the strike.
-Places bracket orders via ib_insync.
+Places bracket orders via ib_async (community successor to ib_insync).
 Imports only from core.types — never from other agents.
 """
 
@@ -67,7 +67,7 @@ class AresAgent:
             logger.error("[ARES] cancel_all_pending failed: %s", exc)
 
     def _place_bracket(self, ib, symbol: str, sized: SizedSignal) -> TradeResult:
-        from ib_insync import Stock
+        from ib_async import Stock
         contract = Stock(symbol, "SMART", "USD")
         ib.qualifyContracts(contract)
 
@@ -118,7 +118,7 @@ class AresAgent:
     def _get_connection(self):
         import asyncio
         asyncio.set_event_loop(asyncio.new_event_loop())
-        from ib_insync import IB  # eventkit reads event loop at import time
+        from ib_async import IB
         if self._ib is not None:
             try:
                 self._ib.disconnect()
