@@ -13,6 +13,9 @@ logs/
 *.db
 *.log
 
+# ChromaDB derived indexes (rebuilt from knowledge/*.md)
+knowledge/chroma/
+
 # Environment variables
 .env
 .env.*
