@@ -676,16 +676,59 @@ class ApolloAgent:
 
     @staticmethod
     def _append_to_zeus_skills(insights: str) -> None:
-        """Write insight block to zeus_skills.md for future KB ingestion."""
+        """Write insight block into the bounded AUTO-INSIGHTS section of zeus_skills.md.
+
+        Rules:
+        - All auto-generated content lives between START/END markers.
+        - Content above the markers (hand-written skills) is never touched.
+        - Each block is stamped with a UTC timestamp line.
+        - Only the _MAX_INSIGHTS most recent blocks are kept; oldest are trimmed.
+        - Idempotent per calendar day: calling twice on the same date is a no-op.
+        """
+        _MAX_INSIGHTS = 10
+        _START = "<!-- AUTO-INSIGHTS:START -->"
+        _END   = "<!-- AUTO-INSIGHTS:END -->"
+
         skills_path = Path("knowledge/agents/zeus_skills.md")
         if not skills_path.exists():
             return
-        current = skills_path.read_text(encoding="utf-8")
-        # Replace existing insights block from same date if present
+
+        current  = skills_path.read_text(encoding="utf-8")
         date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        marker   = f"## Self-Improvement Insights — {date_str}"
-        if marker in current:
-            # Already wrote insights today — skip to avoid duplicate bloat
+
+        if _START in current:
+            pre, rest = current.split(_START, 1)
+            if _END in rest:
+                section, post = rest.split(_END, 1)
+            else:
+                section, post = rest, ""
+        else:
+            # First run — create markers at the end without disturbing existing content
+            pre     = current.rstrip() + "\n\n"
+            section = "\n"
+            post    = "\n"
+
+        # Idempotent: skip if today's block already present
+        if date_str in section:
             return
-        skills_path.write_text(current.rstrip() + "\n\n" + insights + "\n", encoding="utf-8")
-        logger.info("[APOLLO] Self-improvement insights written to zeus_skills.md.")
+
+        timestamp_line = f"<!-- generated: {datetime.now(timezone.utc).isoformat(timespec='seconds')}Z -->"
+        new_block = f"\n{timestamp_line}\n{insights.strip()}\n"
+
+        # Split existing section into individual blocks (each starts with the timestamp comment)
+        raw_blocks = [b for b in section.split("\n<!-- generated:") if b.strip()]
+        # Re-attach the prefix stripped by split (except first which may not have it)
+        rebuilt: list[str] = []
+        for i, b in enumerate(raw_blocks):
+            rebuilt.append(b if i == 0 else "<!-- generated:" + b)
+
+        # Append new block and trim to cap
+        rebuilt.append(new_block)
+        kept = rebuilt[-_MAX_INSIGHTS:]
+
+        new_section = "\n" + "".join(kept) + "\n"
+        skills_path.write_text(
+            pre + _START + new_section + _END + post,
+            encoding="utf-8",
+        )
+        logger.info("[APOLLO] Self-improvement insights written to zeus_skills.md (%d blocks kept).", len(kept))
