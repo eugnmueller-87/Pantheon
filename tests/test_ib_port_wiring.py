@@ -18,7 +18,9 @@ attempted. Ares and Argus agents are inspected directly after construction.
 from __future__ import annotations
 
 import os
-from unittest.mock import MagicMock, call, patch
+import sys
+import types as _types
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -26,7 +28,6 @@ from agents.ares import AresAgent
 from agents.argus import ArgusAgent
 from agents.zeus import ZeusConfig, ZeusOrchestrator
 from config.settings import _DEFAULTS as SETTINGS_DEFAULTS
-
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -142,9 +143,6 @@ class TestZeusPortWiring:
 
 # ── Retry: disconnect called on failed attempt ──────────────────────────────────
 
-import sys
-import types as _types
-
 
 def _make_ib_async_mock(mock_ib: MagicMock) -> MagicMock:
     """Return a fake ib_async module whose IB() constructor returns mock_ib."""
@@ -241,9 +239,15 @@ class TestRetryDisconnect:
     def test_ares_raises_after_all_retries_exhausted(self):
         """place() returns an error result when all 3 connect attempts fail."""
         from datetime import datetime, timezone
+
         from core.types import (
-            FilteredSignal, MacroContext, MarketRegime, RawSignal,
-            SignalCategory, Severity, SizedSignal,
+            FilteredSignal,
+            MacroContext,
+            MarketRegime,
+            RawSignal,
+            Severity,
+            SignalCategory,
+            SizedSignal,
         )
         agent = AresAgent(paper=True, port=4002)
         mock_ib = MagicMock()
@@ -279,9 +283,9 @@ class TestEarlyClose:
     @staticmethod
     def _check(utc_dt):
         """Call _is_market_open() with a pinned UTC time via monkeypatching datetime.now."""
-        import main as main_mod
         from datetime import datetime, timezone
-        original_now = datetime.now
+
+        import main as main_mod
 
         class _PinnedDatetime(datetime):
             @classmethod
