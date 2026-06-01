@@ -8,6 +8,7 @@ Imports only from core.types — never from other agents.
 from __future__ import annotations
 
 import logging
+import time
 import uuid
 
 from core.agent_knowledge import AgentKnowledgeBase
@@ -17,20 +18,21 @@ logger = logging.getLogger("ares")
 
 
 class AresAgent:
-    IB_PAPER_PORT = 4004  # socat bridge inside ibgateway container (4004→127.0.0.1:4002)
+    IB_PAPER_PORT = 4002
     IB_LIVE_PORT  = 4001
 
     def __init__(
         self,
         paper: bool = True,
         host: str = "ibgateway",
+        port: int | None = None,
         stop_loss_pct: float = 0.03,
         take_profit_pct: float = 0.06,
         default_account_equity: float = 100_000.0,
     ):
         self.paper                  = paper
         self.host                   = host
-        self.port                   = self.IB_PAPER_PORT if paper else self.IB_LIVE_PORT
+        self.port                   = port if port is not None else (self.IB_PAPER_PORT if paper else self.IB_LIVE_PORT)
         self.stop_loss_pct          = stop_loss_pct
         self.take_profit_pct        = take_profit_pct
         self.default_account_equity = default_account_equity
@@ -117,17 +119,39 @@ class AresAgent:
 
     def _get_connection(self):
         import asyncio
-        asyncio.set_event_loop(asyncio.new_event_loop())
         from ib_async import IB
-        if self._ib is not None:
+
+        # Close the previous loop cleanly before creating a new one.
+        try:
+            old_loop = asyncio.get_event_loop()
+            if not old_loop.is_running():
+                old_loop.close()
+        except Exception:
+            pass
+        asyncio.set_event_loop(asyncio.new_event_loop())
+
+        last_exc: Exception | None = None
+        for attempt, backoff in enumerate([0, 1, 2]):
+            # Clean up any previous handle before each attempt (including first,
+            # in case self._ib was left over from a prior call).
+            if self._ib is not None:
+                try:
+                    self._ib.disconnect()
+                except Exception:
+                    pass
+                self._ib = None
+            if backoff:
+                time.sleep(backoff)
             try:
-                self._ib.disconnect()
-            except Exception:
-                pass
-        self._ib = IB()
-        self._ib.connect(self.host, self.port, clientId=1)
-        logger.info("[ARES] Connected to IB %s:%d", self.host, self.port)
-        return self._ib
+                self._ib = IB()
+                self._ib.connect(self.host, self.port, clientId=1)
+                logger.info("[ARES] Connected to IB %s:%d (attempt %d)", self.host, self.port, attempt + 1)
+                return self._ib
+            except Exception as exc:
+                last_exc = exc
+                logger.warning("[ARES] Connect attempt %d failed: %s", attempt + 1, exc)
+
+        raise RuntimeError(f"[ARES] Could not connect to IB {self.host}:{self.port} after 3 attempts: {last_exc}")
 
     @staticmethod
     def _null_result() -> TradeResult:

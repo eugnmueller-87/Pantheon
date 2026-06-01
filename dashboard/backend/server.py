@@ -250,6 +250,17 @@ async def websocket_endpoint(ws: WebSocket):
     for evt in recent:
         await ws.send_text(json.dumps(evt, default=str))
 
+    async def _ping_loop():
+        """Send a ping every 30s to keep the connection alive through nginx."""
+        while True:
+            await asyncio.sleep(30)
+            try:
+                await ws.send_text(json.dumps({"type": "ping"}))
+            except Exception:
+                break
+
+    ping_task = asyncio.create_task(_ping_loop())
+
     try:
         while True:
             data = await ws.receive_text()
@@ -268,6 +279,7 @@ async def websocket_endpoint(ws: WebSocket):
                     bus.record("resume", {"message": "Pipeline resumed via dashboard"})
     except WebSocketDisconnect:
         bus.unsubscribe(ws)
+        ping_task.cancel()
         logger.info("Client disconnected: %s", ws.client)
 
 

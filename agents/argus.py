@@ -60,7 +60,7 @@ class ArgusAgent:
         milestone_manager = None,   # MilestoneManager injected by ZEUS
         default_account_equity: float                          = 100_000.0,
         ib_host:                str                            = "ibgateway",
-        ib_port:                int                            = 4004,  # socat bridge (4004→127.0.0.1:4002)
+        ib_port:                int                            = 4002,
         mock:                   bool                           = False,  # skip IB, track positions in-memory only
     ):
         self.max_drawdown_pct  = max_drawdown_pct
@@ -302,13 +302,34 @@ class ArgusAgent:
 
     def _get_connection(self):
         import asyncio
-        asyncio.set_event_loop(asyncio.new_event_loop())
+        import time
         from ib_async import IB
-        if self._ib is not None:
+
+        try:
+            old_loop = asyncio.get_event_loop()
+            if not old_loop.is_running():
+                old_loop.close()
+        except Exception:
+            pass
+        asyncio.set_event_loop(asyncio.new_event_loop())
+
+        last_exc: Exception | None = None
+        for attempt, backoff in enumerate([0, 1, 2]):
+            if self._ib is not None:
+                try:
+                    self._ib.disconnect()
+                except Exception:
+                    pass
+                self._ib = None
+            if backoff:
+                time.sleep(backoff)
             try:
-                self._ib.disconnect()
-            except Exception:
-                pass
-        self._ib = IB()
-        self._ib.connect(self._ib_host, self._ib_port, clientId=2)
-        return self._ib
+                self._ib = IB()
+                self._ib.connect(self._ib_host, self._ib_port, clientId=2)
+                logger.info("[ARGUS] Connected to IB %s:%d (attempt %d)", self._ib_host, self._ib_port, attempt + 1)
+                return self._ib
+            except Exception as exc:
+                last_exc = exc
+                logger.warning("[ARGUS] Connect attempt %d failed: %s", attempt + 1, exc)
+
+        raise RuntimeError(f"[ARGUS] Could not connect to IB {self._ib_host}:{self._ib_port} after 3 attempts: {last_exc}")

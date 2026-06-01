@@ -71,6 +71,8 @@ class ZeusConfig:
     default_account_equity:     float = 100_000.0
     stop_loss_pct:              float = 0.03
     take_profit_pct:            float = 0.06
+    ib_paper_port:              int   = 4002
+    ib_live_port:               int   = 4001
 
 
 @dataclass
@@ -129,6 +131,10 @@ class ZeusOrchestrator:
         self.hades     = HadesAgent()
         self.artemis   = ArtemisAgent()
         self.pythia    = PythiaAgent(milestone_manager=self.milestone)
+        # Resolve IB port once: env > settings.json > ZeusConfig default (4002/4001).
+        _ib_port_default = self.config.ib_paper_port if self.config.paper_trading else self.config.ib_live_port
+        _ib_port = int(os.getenv("IB_PORT", str(_ib_port_default)))
+
         self.ares      = (
             AresMockAgent(
                 account_equity=self.config.default_account_equity,
@@ -139,6 +145,7 @@ class ZeusOrchestrator:
             else AresAgent(
                 paper=self.config.paper_trading,
                 host=os.getenv("IB_HOST", "ibgateway"),
+                port=_ib_port,
                 stop_loss_pct=self.config.stop_loss_pct,
                 take_profit_pct=self.config.take_profit_pct,
             )
@@ -149,7 +156,7 @@ class ZeusOrchestrator:
             milestone_manager=self.milestone,
             default_account_equity=self.config.default_account_equity,
             ib_host=os.getenv("IB_HOST", "ibgateway"),
-            ib_port=int(os.getenv("IB_PORT", "4004")),
+            ib_port=_ib_port,
             mock=self.config.mock_execution,  # mirror mock_execution — no IB in mock mode
         )
 

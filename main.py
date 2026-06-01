@@ -228,27 +228,63 @@ class ZeusHandler(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
 
-def _is_market_open() -> bool:
+def _edt_offset(utc_dt: datetime) -> int:
+    """Return ET UTC offset: -4 (EDT) or -5 (EST).
+    EDT starts 2nd Sunday of March, ends 1st Sunday of November.
     """
-    Returns True if the NYSE is currently open for regular trading.
-    Hours: Mon–Fri 09:30–16:00 ET (UTC-4 in summer, UTC-5 in winter).
-    Uses a simple UTC offset — no external dependency required.
-    """
-    # US Eastern: UTC-4 (EDT, Mar–Nov) or UTC-5 (EST, Nov–Mar)
-    now_utc = datetime.now(timezone.utc)
-    # Approximate EDT/EST switch: second Sunday of March / first Sunday of November
-    # Good enough for trading purposes — a few days of error at DST boundary is fine
-    month = now_utc.month
-    et_offset = -4 if 3 <= month <= 10 else -5
-    now_et = now_utc + timedelta(hours=et_offset)
+    y = utc_dt.year
+    # 2nd Sunday of March
+    march1_wd = datetime(y, 3, 1).weekday()          # 0=Mon … 6=Sun
+    first_sun_mar = 1 + (6 - march1_wd) % 7
+    dst_start = datetime(y, 3, first_sun_mar + 7, 2)  # +7 = second Sunday
+    # 1st Sunday of November
+    nov1_wd = datetime(y, 11, 1).weekday()
+    first_sun_nov = 1 + (6 - nov1_wd) % 7
+    dst_end = datetime(y, 11, first_sun_nov, 2)
+    return -4 if dst_start <= utc_dt.replace(tzinfo=None) < dst_end else -5
 
-    # Weekend check
-    if now_et.weekday() >= 5:  # 5=Sat, 6=Sun
+
+# NYSE holidays — fixed dates only (observed rules applied: if holiday falls
+# on Saturday the prior Friday is observed; Sunday → following Monday).
+# Extend this set each December for the coming year. No external dependency.
+_NYSE_HOLIDAYS = {
+    # 2025
+    (2025, 1, 1), (2025, 1, 20), (2025, 2, 17), (2025, 4, 18),
+    (2025, 5, 26), (2025, 6, 19), (2025, 7, 4), (2025, 9, 1),
+    (2025, 11, 27), (2025, 12, 25),
+    # 2026
+    (2026, 1, 1), (2026, 1, 19), (2026, 2, 16), (2026, 4, 3),
+    (2026, 5, 25), (2026, 6, 19), (2026, 7, 3), (2026, 9, 7),
+    (2026, 11, 26), (2026, 12, 25),
+}
+
+
+# NYSE early-close days (13:00 ET close) — day before Independence Day,
+# day after Thanksgiving, Christmas Eve when not a full holiday.
+# Extend this set each December for the coming year. No external dependency.
+_NYSE_EARLY_CLOSE = {
+    # 2025
+    (2025, 7, 3), (2025, 11, 28), (2025, 12, 24),
+    # 2026
+    (2026, 7, 2), (2026, 11, 27), (2026, 12, 24),
+}
+
+
+def _is_market_open() -> bool:
+    """Returns True if NYSE is currently open for regular trading (Mon–Fri 09:30–16:00 ET, 13:00 on half-days)."""
+    now_utc = datetime.now(timezone.utc)
+    now_et  = now_utc + timedelta(hours=_edt_offset(now_utc))
+
+    if now_et.weekday() >= 5:
         return False
 
-    # Regular session: 09:30–16:00 ET
-    open_time  = now_et.replace(hour=9,  minute=30, second=0, microsecond=0)
-    close_time = now_et.replace(hour=16, minute=0,  second=0, microsecond=0)
+    today = (now_et.year, now_et.month, now_et.day)
+    if today in _NYSE_HOLIDAYS:
+        return False
+
+    open_time = now_et.replace(hour=9, minute=30, second=0, microsecond=0)
+    close_hour = 13 if today in _NYSE_EARLY_CLOSE else 16
+    close_time = now_et.replace(hour=close_hour, minute=0, second=0, microsecond=0)
     return open_time <= now_et < close_time
 
 
