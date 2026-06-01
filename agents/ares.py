@@ -119,6 +119,7 @@ class AresAgent:
 
     def _get_connection(self):
         import asyncio
+
         from ib_async import IB
 
         # Close the previous loop cleanly before creating a new one.

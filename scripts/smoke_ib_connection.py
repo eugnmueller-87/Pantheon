@@ -61,7 +61,7 @@ def main() -> int:
         return 1
 
     if not ib.isConnected():
-        print(f"ERROR: connect() returned but isConnected() is False", file=sys.stderr)
+        print("ERROR: connect() returned but isConnected() is False", file=sys.stderr)
         try:
             ib.disconnect()
         except Exception:

@@ -303,6 +303,7 @@ class ArgusAgent:
     def _get_connection(self):
         import asyncio
         import time
+
         from ib_async import IB
 
         try:
