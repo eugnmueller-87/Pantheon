@@ -36,3 +36,4 @@ dashboard/frontend/dist/
 
 # Temp files
 zeus_readme_b64.txt
+infra/grafana/push_dashboard.py

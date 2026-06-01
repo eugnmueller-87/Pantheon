@@ -118,7 +118,7 @@ Use `infra/supabase/TEMPLATE_migration_NNN.sql` as your starting point.
 Interactive Brokers credentials control **real money**. Extra caution:
 
 1. **`IB_PASSWORD` and `IBC_TOTP_SECRET` are never logged** — mask them everywhere
-2. **Paper vs live ports** — Zeus connects to port `4004` (paper). Live port `4003`
+2. **Paper vs live ports** — Zeus connects to port `4002` (paper). Live port `4001`
    is wired but disabled. Never change `IB_PORT` to live in prod without an
    explicit Vault unlock + human confirmation
 3. **`mock_execution`** — when `true` in `config/settings.json`, Ares skips
@@ -234,7 +234,7 @@ If you are an AI agent (Zeus, Icarus, Claude, etc.) working on this codebase:
    automated agents. There is no override.
 
 4. **Never change `IB_PORT` to a live port** without explicit human
-   confirmation in the chat. Paper = 4002/4004. Live = 4001/4003.
+   confirmation in the chat. Paper = 4002. Live = 4001.
 
 5. **Before pushing**, run `bash scripts/install-hooks.sh` once, then the
    pre-commit hook runs automatically on every `git commit`.

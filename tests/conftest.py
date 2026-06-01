@@ -25,6 +25,33 @@ os.environ.pop("SUPABASE_SERVICE_ROLE_KEY", None)
 # Disable Kafka so no broker connection is attempted during tests
 os.environ.setdefault("KAFKA_ENABLED", "false")
 
+# List of env vars that must never be set during tests — importing any module
+# that calls load_dotenv() (e.g. main.py) can inject these from a local .env
+# file and cause PythiaAgent to switch from SQLite to Supabase mid-suite.
+_BLOCKED_ENV_VARS = (
+    "SUPABASE_URL",
+    "SUPABASE_SERVICE_ROLE_KEY",
+)
+
+
+@pytest.fixture(autouse=True)
+def _block_supabase_env():
+    """
+    Re-enforce the Supabase env block before every test and restore the env
+    to its pre-test state afterwards. This prevents any module imported during
+    a test (e.g. main.py via load_dotenv()) from leaking SUPABASE_URL into
+    later tests and causing PythiaAgent to silently switch to Supabase mode.
+    """
+    saved = {k: os.environ.pop(k, None) for k in _BLOCKED_ENV_VARS}
+    yield
+    # Restore exactly: re-inject only vars that existed before the test ran
+    # (normally None — they were absent), and remove any that were injected.
+    for k, v in saved.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
+
 
 def _make_ticker(close_values):
     hist = pd.DataFrame({"Close": close_values})

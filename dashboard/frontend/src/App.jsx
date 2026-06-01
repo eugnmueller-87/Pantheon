@@ -183,7 +183,7 @@ export default function App() {
   const ddColor    = drawdown < 3 ? '#48bb78' : drawdown < 6 ? '#f6e05e' : '#fc8181'
   const pipeStatus = status?.pipeline_status || 'UNKNOWN'
   const equity     = Number(status?.equity ?? 4000)
-  const startEquity = 4000
+  const startEquity = 4000  // matches settings.json: starting_equity (reset to EUR 4000)
 
   const tradeEvents   = events.filter(e => e.type === 'trade_placed')
   const killEvents    = events.filter(e => e.type === 'signal_killed')

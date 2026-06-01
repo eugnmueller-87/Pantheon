@@ -25,8 +25,8 @@ _DEFAULTS: dict[str, Any] = {
     "signal_source": "supabase",
     # IBKR
     "ib_host": "127.0.0.1",
-    "ib_paper_port": 7497,
-    "ib_live_port": 7496,
+    "ib_paper_port": 4002,
+    "ib_live_port": 4001,
     "default_account_equity": 4_000.0,     # realistic starting capital — paper trades real-world constraints
     "starting_equity": 4_000.0,
     # Risk parameters — Ares bracket order

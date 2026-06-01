@@ -221,6 +221,20 @@ IB paper account has no live market data subscription. `ticker.midpoint()` retur
 
 ---
 
+### 23. Port 4004 socat approach is obsolete — 4002 is canonical (2026-06-01)
+
+**Supersedes entries #13 and #21.**
+
+Entry #13 introduced a socat bridge (`TCP-LISTEN:4004,fork TCP:127.0.0.1:4002`) inside the ibgateway container to work around an IPv6-only listener. Entry #21 then locked `.env` to `IB_PORT=4004`. Neither the socat bridge nor port 4004 survived subsequent image/config changes.
+
+**What was found:** The `gnzsnz/ib-gateway:10.30` image already binds `0.0.0.0:4002` (IPv4 wildcard) internally. There is no socat process, no 4004 listener. Every order attempted by Ares at market open was failing with connection refused on port 4004.
+
+There was also a four-way split: `ares.py` hardcoded `IB_PAPER_PORT = 4004`, `zeus.py` passed `IB_PORT` env default `"4004"` to Argus but not to Ares, `config/settings.json` said `4002` (correct, unread), and `config/settings.py` defaults said `7497` (TWS desktop, wrong).
+
+**Fix:** Single source of truth — port 4002 (paper), 4001 (live). Zeus resolves the port once (`IB_PORT` env > `settings.json` > `ZeusConfig` default) and passes the same value to both Ares and Argus. The socat comment is removed. Do not reintroduce port 4004 in any form.
+
+---
+
 ## Current Status — 2026-05-26
 
 | What | Status |
