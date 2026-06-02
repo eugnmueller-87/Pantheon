@@ -208,7 +208,7 @@ async def _status_poller():
 
 async def _health_poller():
     while True:
-        await asyncio.sleep(30)
+        await asyncio.sleep(10)
         zeus = get_zeus()
         if zeus is None:
             continue

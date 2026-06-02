@@ -84,7 +84,15 @@ class ArgusAgent:
         self.outcome_resolver = OutcomeResolver(knowledge_base=knowledge_base)
 
     def health(self) -> AgentHealth:
-        return AgentHealth.HEALTHY
+        if self._mock:
+            return AgentHealth.HEALTHY
+        import socket
+        try:
+            with socket.create_connection((self._ib_host, self._ib_port), timeout=3):
+                pass
+            return AgentHealth.HEALTHY
+        except OSError:
+            return AgentHealth.DEGRADED
 
     def refresh(self) -> PortfolioState:
         if self._mock:

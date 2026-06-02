@@ -569,10 +569,15 @@ class IcarusAgent:
                     if resolved:
                         sig.affected_tickers = [resolved]
                         logger.info("[ICARUS] Resolved %s → %s", sig.supplier, resolved)
-                    else:
-                        logger.warning("[ICARUS] No ticker for '%s' — Zeus will reject", sig.supplier)
                 except Exception as exc:
                     logger.warning("[ICARUS] Ticker lookup failed for '%s': %s", sig.supplier, exc)
+
+            # Drop untradeable signals — no ticker means no executable position.
+            # Mark consumed so they don't accumulate; don't pass to Zeus LLM.
+            if not sig.affected_tickers:
+                logger.info("[ICARUS] Dropping no-ticker signal (%s): %s", sig.supplier, sig.headline[:60])
+                consumed_ids.append(row["signal_id"])
+                continue
 
             signals.append(sig)
             consumed_ids.append(row["signal_id"])
