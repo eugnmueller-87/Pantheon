@@ -42,9 +42,13 @@ class AresAgent:
         logger.info("[ARES] %s mode — port %d", "PAPER" if paper else "LIVE", self.port)
 
     def health(self) -> AgentHealth:
-        if self._ib is None:
-            return AgentHealth.HEALTHY  # not yet connected — report healthy until first trade
-        return AgentHealth.HEALTHY if self._ib.isConnected() else AgentHealth.DEGRADED
+        import socket
+        try:
+            with socket.create_connection((self.host, self.port), timeout=3):
+                pass
+            return AgentHealth.HEALTHY
+        except OSError:
+            return AgentHealth.DEGRADED
 
     def place(self, sized: SizedSignal) -> TradeResult:
         if not sized.affected_tickers:
