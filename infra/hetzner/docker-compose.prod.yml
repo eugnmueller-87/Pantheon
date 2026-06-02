@@ -23,6 +23,8 @@ services:
     image: ghcr.io/gnzsnz/ib-gateway:10.30
     container_name: pantheon_ibgateway
     restart: unless-stopped
+    labels:
+      - "autoheal=true"
     environment:
       - TWS_USERID=${IB_USERNAME}
       - TWS_PASSWORD=${IB_PASSWORD}
@@ -45,6 +47,23 @@ services:
       timeout: 10s
       retries: 5
       start_period: 120s
+    networks:
+      - pantheon
+
+  # ── Autoheal — restart unhealthy containers automatically ──────
+  # Watches for containers with label autoheal=true that go unhealthy
+  # and restarts them. Recovers IBGateway when port 4002 stops responding
+  # without requiring manual intervention.
+  autoheal:
+    image: willfarrell/autoheal:latest
+    container_name: pantheon_autoheal
+    restart: always
+    environment:
+      - AUTOHEAL_CONTAINER_LABEL=autoheal
+      - AUTOHEAL_INTERVAL=30
+      - AUTOHEAL_START_PERIOD=120
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - pantheon
 
