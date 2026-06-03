@@ -45,6 +45,24 @@ _DEFAULTS: dict[str, Any] = {
     "vix_extreme": 35.0,
     "bull_threshold": 0.02,       # SPY 1m return above this = bull
     "bear_threshold": -0.03,      # SPY 1m return below this = bear
+    # Atlas — self-sourced universe screener (Phase 2)
+    "universe_screener_enabled":       False,   # dark by default — flip to True to activate
+    "universe_market_cap_min":         5e9,     # $5B floor
+    "universe_market_cap_max":         2e12,    # $2T ceiling (exclude hyper-mega-caps)
+    "universe_min_beta":               0.5,     # exclude sleepy low-beta names
+    "universe_min_avg_dollar_volume":  5e6,     # $5M/day minimum liquidity
+    "universe_min_price":              10.0,    # $10 floor — no penny stocks
+    "universe_momentum_window_days":   20,      # trading days for momentum measurement
+    "universe_momentum_threshold":     0.05,    # 5% return over window to qualify
+    "universe_volume_spike_mult":      1.5,     # current volume must be > 1.5× 20-day avg
+    "universe_max_candidates":         50,      # cap screener input size
+    # Ares — ATR-based volatility-aware stops (Phase 3)
+    "use_atr_stops":       False,   # dark by default — flip to True to activate
+    "atr_period":          14,      # ATR lookback window (trading days)
+    "atr_stop_multiple":   2.0,     # stop = entry ± (ATR × multiple)
+    "min_stop_pct":        0.03,    # floor: stop never tighter than 3%
+    "max_stop_pct":        0.12,    # ceiling: stop never wider than 12%
+    "reward_risk_ratio":   2.0,     # take-profit = entry ± (stop_distance × ratio)
 }
 
 

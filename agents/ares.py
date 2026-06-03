@@ -94,13 +94,11 @@ class AresAgent:
         account_val = self._get_account_value(ib)
         if account_val <= 0:
             raise ValueError(f"Invalid account equity: {account_val}")
-        qty         = max(1, int(account_val * sized.position_size_pct / mid))
-        is_long     = sized.category != SignalCategory.SUPPLIER_DISRUPTION
-        side        = "BUY" if is_long else "SELL"
-        sl  = self.stop_loss_pct
-        tp  = self.take_profit_pct
-        stop_price  = round(mid * (1 - sl if is_long else 1 + sl), 2)
-        limit_price = round(mid * (1 + tp if is_long else 1 - tp), 2)
+        qty     = max(1, int(account_val * sized.position_size_pct / mid))
+        is_long = sized.category != SignalCategory.SUPPLIER_DISRUPTION
+        side    = "BUY" if is_long else "SELL"
+
+        stop_price, limit_price = self._compute_stops(symbol, mid, is_long)
 
         bracket = ib.bracketOrder(side, qty, mid, limit_price, stop_price)
         for o in bracket:
@@ -114,6 +112,67 @@ class AresAgent:
             fill_price=mid, qty=qty,
             stop_loss_price=stop_price, take_profit_price=limit_price,
         )
+
+    def _compute_stops(
+        self,
+        symbol: str,
+        fill_price: float,
+        is_long: bool,
+    ) -> tuple[float, float]:
+        """
+        Return (stop_price, take_profit_price).
+
+        If use_atr_stops is True in settings, derive stop distance from ATR,
+        clamped to [min_stop_pct, max_stop_pct].
+        Falls back to fixed percentage stops when ATR is unavailable.
+        """
+        from typing import Optional as _Opt
+
+        from config.settings import load_settings
+        s = load_settings()
+
+        use_atr = s.get("use_atr_stops", False)
+        atr_val: "_Opt[float]" = None
+
+        if use_atr:
+            atr_period = int(s.get("atr_period", 14))
+            try:
+                import yfinance as yf
+                hist = yf.Ticker(symbol).history(period=f"{atr_period + 5}d")
+                if hist is not None and len(hist) >= atr_period:
+                    high   = hist["High"]
+                    low    = hist["Low"]
+                    close  = hist["Close"]
+                    prev_c = close.shift(1)
+                    tr = (
+                        (high - low)
+                        .combine(abs(high - prev_c), max)
+                        .combine(abs(low  - prev_c), max)
+                    )
+                    atr_val = float(tr.iloc[-atr_period:].mean())
+            except Exception as exc:
+                logger.debug("[ARES] ATR fetch failed for %s: %s — using fixed stops", symbol, exc)
+
+        if use_atr and atr_val is not None and fill_price > 0:
+            min_stop = float(s.get("min_stop_pct", 0.03))
+            max_stop = float(s.get("max_stop_pct", 0.12))
+            rr       = float(s.get("reward_risk_ratio", 2.0))
+
+            raw_stop_pct = atr_val / fill_price * float(s.get("atr_stop_multiple", 2.0))
+            stop_pct     = max(min_stop, min(max_stop, raw_stop_pct))
+            tp_pct       = stop_pct * rr
+
+            logger.info(
+                "[ARES] ATR stop — symbol=%s ATR=%.4f fill=%.4f stop_pct=%.3f tp_pct=%.3f",
+                symbol, atr_val, fill_price, stop_pct, tp_pct,
+            )
+        else:
+            stop_pct = self.stop_loss_pct
+            tp_pct   = self.take_profit_pct
+
+        stop_price  = round(fill_price * (1 - stop_pct if is_long else 1 + stop_pct), 2)
+        limit_price = round(fill_price * (1 + tp_pct   if is_long else 1 - tp_pct),   2)
+        return stop_price, limit_price
 
     def _get_account_value(self, ib) -> float:
         # Always use the configured equity cap — never the raw IBKR paper balance.
