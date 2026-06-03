@@ -20,7 +20,7 @@ import logging
 import os
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -58,21 +58,23 @@ logger = logging.getLogger("zeus")
 
 @dataclass
 class ZeusConfig:
-    max_portfolio_drawdown_pct: float = 0.08
-    max_open_positions:         int   = 10
-    paper_trading:              bool  = True
-    mock_execution:             bool  = True
-    min_zeus_confidence:        float = 0.55
-    use_llm_reasoning:          bool  = True
-    starting_equity:            float = 100.0  # seed capital — MilestoneManager tracks from here
+    max_portfolio_drawdown_pct:   float = 0.08
+    max_open_positions:           int   = 3    # settings is authoritative — see build_zeus()
+    max_open_positions_per_ticker: int  = 1    # never hold > 1 position per ticker
+    ticker_cooldown_hours:        float = 48.0 # hours before re-trading same ticker
+    paper_trading:                bool  = True
+    mock_execution:               bool  = True
+    min_zeus_confidence:          float = 0.55
+    use_llm_reasoning:            bool  = True
+    starting_equity:              float = 100.0  # seed capital — MilestoneManager tracks from here
     # Hermes Railway URL — Icarus uses Supabase as primary source;
     # this is the fallback when Supabase has no unconsumed signals.
-    hermes_base_url:            str   = "https://hermes-agent-production-114e.up.railway.app"
-    default_account_equity:     float = 100_000.0
-    stop_loss_pct:              float = 0.03
-    take_profit_pct:            float = 0.06
-    ib_paper_port:              int   = 4002
-    ib_live_port:               int   = 4001
+    hermes_base_url:              str   = "https://hermes-agent-production-114e.up.railway.app"
+    default_account_equity:       float = 100_000.0
+    stop_loss_pct:                float = 0.03
+    take_profit_pct:              float = 0.06
+    ib_paper_port:                int   = 4002
+    ib_live_port:                 int   = 4001
 
 
 @dataclass
@@ -109,6 +111,16 @@ class ZeusOrchestrator:
 
     def __init__(self, config: ZeusConfig | None = None):
         self.config = config or ZeusConfig()
+        # Settings is authoritative for these knobs — override ZeusConfig defaults
+        # so callers don't need to explicitly pass them through ZeusConfig.
+        from config.settings import load_settings
+        _s = load_settings()
+        if self.config.max_open_positions == 3 and "max_open_positions" in _s:
+            self.config.max_open_positions = int(_s["max_open_positions"])
+        if self.config.max_open_positions_per_ticker == 1:
+            self.config.max_open_positions_per_ticker = int(_s.get("max_open_positions_per_ticker", 1))
+        if self.config.ticker_cooldown_hours == 48.0:
+            self.config.ticker_cooldown_hours = float(_s.get("ticker_cooldown_hours", 48.0))
         self.status = PipelineStatus.RUNNING
 
         # Core infrastructure
@@ -445,6 +457,15 @@ class ZeusOrchestrator:
             self._write_trace(trace)
             return run.kill("pythia", trace.kill_reason, trace)
         run.sized_signal = sized
+
+        # Stage 3b — Concentration control
+        # Reject before LLM to avoid burning tokens on a structurally-blocked ticker.
+        conc_kill = self._check_concentration(sized)
+        if conc_kill:
+            trace.killed_at_stage = "concentration"
+            trace.kill_reason     = conc_kill
+            self._write_trace(trace)
+            return run.kill("concentration", conc_kill, trace)
 
         # Stage 4 — Pre-decision enrichment: Apollo researches the company,
         # giving Zeus real fundamentals + recent news before the LLM decides.
@@ -901,6 +922,65 @@ Respond in this exact JSON format — no markdown, no fences, raw JSON only:
             self.argus.send_alert(message)
         except Exception:
             logger.warning("[ZEUS] Alert delivery failed: %s", message)
+
+    def _check_concentration(self, sized: SizedSignal) -> Optional[str]:
+        """
+        Returns a kill reason string if this signal should be blocked for concentration
+        reasons, or None if it should proceed.
+
+        Checks:
+          (a) ticker already has >= max_open_positions_per_ticker open positions
+          (b) ticker was traded within ticker_cooldown_hours
+        """
+        ticker = sized.affected_tickers[0] if sized.affected_tickers else ""
+        if not ticker:
+            return None
+
+        # (a) Open position cap per ticker
+        cap = self.config.max_open_positions_per_ticker
+        open_for_ticker = sum(
+            1 for s in self.argus._state.snapshots if s.symbol == ticker
+        )
+        if open_for_ticker >= cap:
+            return (
+                f"concentration: {ticker} already has {open_for_ticker} open position(s) "
+                f"(cap={cap})"
+            )
+
+        # (b) Cooldown — check intra-run approved trades first (fast path, no I/O)
+        cooldown = timedelta(hours=self.config.ticker_cooldown_hours)
+        now = datetime.now(timezone.utc)
+        for t in self._run_approved_trades:
+            if t.get("ticker") == ticker:
+                return (
+                    f"concentration: {ticker} already approved this cycle "
+                    f"(cooldown={self.config.ticker_cooldown_hours}h)"
+                )
+
+        # Check KB for recent approved trades on this ticker
+        try:
+            history = self.kb.query_ticker_history(ticker, n_results=10)
+            for h in history:
+                if h.get("outcome") not in ("approved", "trade_placed"):
+                    continue
+                ts_raw = h.get("timestamp", "")
+                if not ts_raw:
+                    continue
+                try:
+                    ts = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
+                    if ts.tzinfo is None:
+                        ts = ts.replace(tzinfo=timezone.utc)
+                    if (now - ts) < cooldown:
+                        return (
+                            f"concentration: {ticker} traded {(now - ts).total_seconds() / 3600:.1f}h ago "
+                            f"(cooldown={self.config.ticker_cooldown_hours}h)"
+                        )
+                except (ValueError, TypeError):
+                    continue
+        except Exception as exc:
+            logger.debug("[ZEUS] Concentration KB check failed for %s: %s", ticker, exc)
+
+        return None
 
     def _register_watchdog(self) -> None:
         self.watchdog.register("zeus",    self.health)
