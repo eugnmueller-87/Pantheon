@@ -17,6 +17,8 @@ _DEFAULTS: dict[str, Any] = {
     "mock_execution": True,
     "max_drawdown_pct": 0.08,
     "max_open_positions": 3,        # €4k account — max 3 concurrent positions
+    "max_open_positions_per_ticker": 1,   # never hold more than 1 open position per ticker
+    "ticker_cooldown_hours": 48,          # hours to wait before re-trading the same ticker
     "poll_interval_seconds": 900,
     "webhook_port": 8080,
     "hermes_base_url": "https://hermes-agent-production-114e.up.railway.app",
