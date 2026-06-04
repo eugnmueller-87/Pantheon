@@ -67,9 +67,6 @@ class ZeusConfig:
     min_zeus_confidence:          float = 0.55
     use_llm_reasoning:            bool  = True
     starting_equity:              float = 100.0  # seed capital — MilestoneManager tracks from here
-    # Hermes Railway URL — Icarus uses Supabase as primary source;
-    # this is the fallback when Supabase has no unconsumed signals.
-    hermes_base_url:              str   = "https://hermes-agent-production-114e.up.railway.app"
     default_account_equity:       float = 100_000.0
     stop_loss_pct:                float = 0.03
     take_profit_pct:              float = 0.06
@@ -136,8 +133,6 @@ class ZeusOrchestrator:
         # Apollo first so its get_ticker resolver can be injected into Icarus
         self.apollo    = ApolloAgent(knowledge_base=self.kb)
         self.icarus    = IcarusAgent(
-            base_url=self.config.hermes_base_url,
-            api_key=os.getenv("HERMES_API_KEY", ""),
             ticker_resolver=self.apollo.get_ticker,
         )
         self.hades     = HadesAgent()

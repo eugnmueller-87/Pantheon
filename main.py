@@ -44,7 +44,6 @@ def build_zeus() -> ZeusOrchestrator:
         paper_trading              = settings.get("paper_trading", True),
         mock_execution             = settings.get("mock_execution", True),
         use_llm_reasoning          = settings.get("use_llm_reasoning", True),
-        hermes_base_url            = settings.get("hermes_base_url"),
         default_account_equity     = settings.get("default_account_equity", 100_000.0),
         starting_equity            = settings.get("starting_equity", 100_000.0),
         stop_loss_pct              = settings.get("stop_loss_pct", 0.03),
@@ -311,20 +310,6 @@ def _auto_run_loop(interval_seconds: int):
         time.sleep(interval_seconds)
 
 
-def _hermes_local_loop(interval_seconds: int = 1800):
-    """Background thread: fetch EDGAR + Finnhub signals every 30 min."""
-    logger.info("[MAIN] Hermes Local scheduler started — every %ds", interval_seconds)
-    time.sleep(60)  # let Zeus fully init before first fetch
-    while True:
-        try:
-            from agents.hermes_local import run_cycle
-            result = run_cycle()
-            logger.info("[MAIN] Hermes Local cycle: %s", result)
-        except Exception as exc:
-            logger.exception("[MAIN] Hermes Local error: %s", exc)
-        time.sleep(interval_seconds)
-
-
 def run_webhook_server(host: str = "0.0.0.0", port: int = 8080):
     import threading
     from socketserver import ThreadingMixIn
@@ -340,12 +325,6 @@ def run_webhook_server(host: str = "0.0.0.0", port: int = 8080):
     t = threading.Thread(target=_auto_run_loop, args=(interval,), daemon=True)
     t.start()
     logger.info("[MAIN] Auto-scheduler: pipeline every %ds", interval)
-
-    # Hermes Local — EDGAR + Finnhub signal fetcher every 30 min
-    hermes_interval = int(os.getenv("HERMES_LOCAL_INTERVAL", "1800"))
-    ht = threading.Thread(target=_hermes_local_loop, args=(hermes_interval,), daemon=True)
-    ht.start()
-    logger.info("[MAIN] Hermes Local scheduler: signals every %ds", hermes_interval)
 
     server = ThreadedHTTPServer((host, port), ZeusHandler)
     logger.info("[MAIN] ZEUS webhook server on %s:%d", host, port)

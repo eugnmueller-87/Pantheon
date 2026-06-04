@@ -21,9 +21,7 @@ _DEFAULTS: dict[str, Any] = {
     "ticker_cooldown_hours": 48,          # hours to wait before re-trading the same ticker
     "poll_interval_seconds": 900,
     "webhook_port": 8080,
-    "hermes_base_url": "https://hermes-agent-production-114e.up.railway.app",
-    "hermes_feeds": [],
-    # Signal source strategy: "supabase" (primary, Hermes writes here) or "api" (direct poll)
+    # Icarus reads signals from Supabase (written by hermes_local EDGAR/Finnhub fetcher)
     "signal_source": "supabase",
     # IBKR
     "ib_host": "127.0.0.1",
