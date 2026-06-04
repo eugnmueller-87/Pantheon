@@ -88,6 +88,22 @@ services:
     networks:
       - pantheon
 
+  # ── Hermes Producer — decoupled signal fetcher ─────────────────
+  # Runs agents/hermes_local.run_cycle() every 30 min as its own process.
+  # Own failure domain: a crash here does not affect Zeus or the pipeline.
+  # Writes to Supabase `signals` table; Icarus in Zeus reads from there.
+  hermes-producer:
+    build: /opt/pantheon
+    container_name: pantheon_hermes_producer
+    restart: unless-stopped
+    command: python run_hermes_producer.py
+    env_file: .env
+    environment:
+      - TZ=Europe/Berlin
+      - HERMES_LOCAL_INTERVAL=1800
+    networks:
+      - pantheon
+
   # ── ZEUS Pipeline Server ────────────────────────────────────────
   zeus:
     build: /opt/pantheon

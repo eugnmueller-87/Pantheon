@@ -30,6 +30,13 @@ logger = logging.getLogger("hermes_local")
 FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY", "")
 EDGAR_USER_AGENT = "Pantheon OS eugnmueller@googlemail.com"  # required by SEC fair-use policy
 
+# Quality gate — only upsert signals that pass BOTH conditions:
+#   affected_tickers non-empty  AND  urgency != "LOW"
+# (LOW-urgency signals are noise; MEDIUM and HIGH are worth pipeline attention.)
+# Tune here; no magic numbers elsewhere.
+_REQUIRE_TICKER    = True
+_REQUIRE_QUALITY   = True  # urgency must be MEDIUM or HIGH (not LOW)
+
 # Tickers we actively watch — EDGAR lookups are per-CIK so we also maintain a
 # symbol→CIK map for the most important names. Finnhub news is ticker-based.
 WATCHLIST: list[str] = [
@@ -310,7 +317,7 @@ def fetch_finnhub_news(lookback_hours: int = 1) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def fetch_finnhub_market_news() -> list[dict]:
-    """Fetch general market-moving news from Finnhub (forex, crypto, general categories)."""
+    """Fetch merger/acquisition market news from Finnhub. General category dropped — tickerless firehose."""
     if not FINNHUB_API_KEY:
         return []
 
@@ -318,7 +325,7 @@ def fetch_finnhub_market_news() -> list[dict]:
     seen: set[str] = set()
     cutoff = int(time.time()) - 3600  # last hour only
 
-    for category in ("general", "merger"):
+    for category in ("merger",):  # "general" removed — bulk of tickerless macro_shift noise
         try:
             url = f"https://finnhub.io/api/v1/news?category={category}&token={FINNHUB_API_KEY}"
             resp = _requests.get(url, timeout=10)
@@ -338,7 +345,7 @@ def fetch_finnhub_market_news() -> list[dict]:
                 seen.add(sig_id)
 
                 sig_type, urgency, is_sig = _classify_news(headline, category)
-                if urgency == "LOW":
+                if urgency != "HIGH":  # merger category: only HIGH urgency (confirmed deal headlines)
                     continue
 
                 published_at = datetime.utcfromtimestamp(pub_ts).replace(
@@ -401,7 +408,6 @@ def _upsert_signals(signals: list[dict]) -> int:
 def run_cycle() -> dict[str, int]:
     """
     Full fetch cycle: EDGAR filings + Finnhub company news + Finnhub market news.
-    Called every 30 minutes by the scheduler in main.py.
     Returns counts per source.
     """
     logger.info("[HERMES_LOCAL] Starting fetch cycle")
@@ -420,13 +426,34 @@ def run_cycle() -> dict[str, int]:
             seen.add(s["signal_id"])
             deduped.append(s)
 
-    total = _upsert_signals(deduped)
+    # Quality gate — applied once, after dedup, before upsert (urgency!=LOW AND ticker required)
+    kept: list[dict] = []
+    dropped_no_ticker = 0
+    dropped_low_quality = 0
+    for s in deduped:
+        if _REQUIRE_TICKER and not s.get("affected_tickers"):
+            dropped_no_ticker += 1
+            continue
+        if _REQUIRE_QUALITY and s.get("urgency") == "LOW":
+            dropped_low_quality += 1
+            continue
+        kept.append(s)
+
+    logger.info(
+        "[HERMES_LOCAL] Quality gate: kept=%d dropped_no_ticker=%d dropped_low_quality=%d",
+        len(kept), dropped_no_ticker, dropped_low_quality,
+    )
+
+    total = _upsert_signals(kept)
 
     result = {
-        "edgar":   len(edgar_sigs),
-        "finnhub": len(finnhub_sigs),
-        "market":  len(market_sigs),
-        "total":   total,
+        "edgar":               len(edgar_sigs),
+        "finnhub":             len(finnhub_sigs),
+        "market":              len(market_sigs),
+        "kept":                len(kept),
+        "dropped_no_ticker":   dropped_no_ticker,
+        "dropped_low_quality": dropped_low_quality,
+        "total":               total,
     }
     logger.info("[HERMES_LOCAL] Cycle complete: %s", result)
     return result
