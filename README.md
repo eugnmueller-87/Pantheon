@@ -1,7 +1,7 @@
 # Pantheon OS — Autonomous Trading Orchestrator
 
 ![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=flat&logo=python&logoColor=white)
-![Tests](https://img.shields.io/badge/Tests-255%20passing-brightgreen?style=flat)
+![Tests](https://img.shields.io/badge/Tests-346%20passing-brightgreen?style=flat)
 ![CI](https://img.shields.io/badge/CI%2FCD-GitHub%20Actions-2088FF?style=flat&logo=githubactions&logoColor=white)
 ![Status](https://img.shields.io/badge/Status-Paper%20Trading-orange?style=flat)
 ![Broker](https://img.shields.io/badge/Broker-Interactive%20Brokers-red?style=flat)
@@ -14,7 +14,7 @@
 ![Cloudflare](https://img.shields.io/badge/CDN-Cloudflare%20Pages-F38020?style=flat&logo=cloudflare&logoColor=white)
 ![FRED](https://img.shields.io/badge/Macro-FRED%20API-003087?style=flat)
 
-> **8-agent autonomous trading system. Eight gods, one mission. ZEUS is the supreme orchestrator — all agents report to it. Fully deployed, paper trading live, self-scheduling every 15 minutes on Hetzner.**
+> **8-agent autonomous trading system. ZEUS is the supreme orchestrator — all agents report to it. Fully deployed on Hetzner, paper trading live, self-scheduling every 15 minutes. Signal production runs as a separate decoupled container (Hermes Producer) writing EDGAR + Finnhub intelligence directly into Supabase every 30 minutes.**
 
 ---
 
@@ -51,8 +51,13 @@ Real-time Grafana dashboard auto-refreshing every 30 seconds. Panels include:
 ## Architecture
 
 ```
-  Hermes (live Railway API — 590+ suppliers)
-        ↓
+  ┌─────────────────────────────────────────────────────────────┐
+  │  Hermes Producer (own container — every 30 min)             │
+  │  EDGAR 8-K/10-Q/10-K + Finnhub company news                │
+  │  Quality gate: drops tickerless signals + LOW urgency noise │
+  │  Writes → Supabase `signals` table                         │
+  └──────────────────────────┬──────────────────────────────────┘
+                             │ (Icarus reads from DB)
   [1] Icarus  — Signal Watcher
         ↓  RawSignal
   [2] Hades   — Compliance Filter      ← OFAC · EU sanctions · ESG · LkSG
@@ -70,7 +75,6 @@ Real-time Grafana dashboard auto-refreshing every 30 seconds. Panels include:
 
   [Apollo] — Daily research cycle + one-shot historical bootstrap
      ├── arXiv q-fin paper ingestion → ChromaDB
-     ├── Hermes earnings enrichment → ChromaDB
      ├── Ticker map maintenance → data/ticker_map.json
      ├── Self-improvement loop → analyses traces → updates zeus_skills.md
      └── Historical ingestion (POST /run/research/historical):
@@ -81,11 +85,11 @@ Real-time Grafana dashboard auto-refreshing every 30 seconds. Panels include:
 
   Upstash Redis bridge → SpendLens (procurement intelligence platform)
      ├── zeus:macro:latest          — live market regime
-     ├── zeus:decisions:recent      — ZEUS trade decisions as Icarus signals
+     ├── zeus:decisions:recent      — ZEUS trade decisions (last 50)
      └── zeus:supplier_risk:{slug}  — Hades compliance per vendor
 ```
 
-**ZEUS** owns the entire pipeline. No agent communicates with another directly. Only `zeus.py` imports from `agents/*`. All agents import from `core.types` only — no spaghetti.
+**ZEUS** owns the entire pipeline. No agent communicates with another directly. Only `zeus.py` imports from `agents/*`. All agents import from `core.types` only.
 
 ---
 
@@ -93,14 +97,14 @@ Real-time Grafana dashboard auto-refreshing every 30 seconds. Panels include:
 
 | # | Agent | Mythology | Role |
 |---|---|---|---|
-| 1 | **Icarus** | Flies closest to the sun — first to see market signals | Monitors the live Hermes API (590+ suppliers). Classifies events by category and severity. Deduplicates across poll cycles. Learns which signal patterns Zeus consistently rejects and suppresses them before they burn an LLM call. Seniority gates on ≥15% Zeus approval rate — not just volume. |
+| 1 | **Icarus** | Flies closest to the sun — first to see market signals | Reads signals from Supabase (written by Hermes Producer). Classifies events by category and severity. Deduplicates across poll cycles. Learns which signal patterns Zeus consistently rejects and suppresses them before they burn an LLM call. |
 | 2 | **Hades** | Lord of the underworld — judges who passes | Compliance firewall. OFAC, EU sanctions (BaFin/Reg 833/2014), ESG sector flags, LkSG violations → hard kill or severity downgrade. Full audit trail. |
 | 3 | **Artemis** | Goddess of the hunt — tracks conditions, picks the moment | Fetches VIX, S&P 500 1-month return, and 6 sector ETFs. Classifies market regime (bull/bear/sideways). Suppresses signals that conflict with macro environment. 15-min cache. |
 | 4 | **Pythia** | Oracle of Delphi — reads patterns, predicts outcomes | Learning agent. Every signal → outcome in Supabase. Derives position size from historical hit rates per `{category}×{regime}×{VIX band}`. Kelly-inspired sizing (capped at 5%). |
 | 5 | **ZEUS** | King of Olympus — final word | LLM reasoning via Claude Sonnet. Queries ChromaDB knowledge base. Approves, resizes, or rejects trades with structured JSON rationale. |
-| 6 | **Ares** | God of decisive action — executes the strike | Places bracket orders on Interactive Brokers via `ib_insync`. Entry + 3% stop-loss + 6% take-profit. XETRA-aware. Paper port 7497 / live port 7496. |
+| 6 | **Ares** | God of decisive action — executes the strike | Places bracket orders on Interactive Brokers via `ib_async`. Entry + 3% stop-loss + 6% take-profit. Paper port 4002. |
 | 7 | **Argus** | Hundred-eyed giant — watches everything, never sleeps | Tracks portfolio equity and drawdown in real time. Emergency halt + Telegram alert if drawdown ≥ 8%. Backfills closed-trade P&L into Pythia and ChromaDB. |
-| 8 | **Apollo** | God of knowledge and truth — the librarian | Runs daily: ingests arXiv q-fin papers, crawls Hermes for earnings transcripts, maintains the live supplier→ticker map, runs the self-improvement loop. One-shot historical bootstrap loads 4 years of data before paper trading begins. |
+| 8 | **Apollo** | God of knowledge and truth — the librarian | Runs daily: ingests arXiv q-fin papers, maintains the live ticker map, runs the self-improvement loop. One-shot historical bootstrap loads 4 years of data before paper trading begins. |
 
 ---
 
@@ -108,15 +112,28 @@ Real-time Grafana dashboard auto-refreshing every 30 seconds. Panels include:
 
 | Component | Detail |
 |---|---|
-| **Server** | Hetzner VPS — Ubuntu 24.04, 2 vCPU, 4 GB RAM |
+| **Server** | Hetzner VPS — Ubuntu 24.04, 2 vCPU, 4 GB RAM (`187.124.14.81`) |
 | **Domain** | `moremanamoreproblems.de` → SSL via Let's Encrypt |
-| **Containers** | `zeus` · `dashboard` · `grafana` · `redis` · `nginx` (Docker Compose) |
+| **Containers** | `zeus` · `hermes-producer` · `dashboard` · `grafana` · `ibgateway` · `redis` · `kafka` · `nginx` · `autoheal` |
 | **Image registry** | GitHub Container Registry (`ghcr.io/eugnmueller-87/pantheon`) |
-| **Database** | Supabase (PostgreSQL + pgvector + RLS) — 11 tables |
+| **Database** | Supabase (PostgreSQL + pgvector) |
 | **Cache** | Upstash Redis — shared with SpendLens via RedisBridge |
-| **CDN** | Cloudflare Pages — React dashboard at `pantheon-dashboard-ban.pages.dev` |
+| **CDN** | Cloudflare Pages — React dashboard |
 | **Monitoring** | Grafana — live trading dashboard, reads Supabase directly |
-| **CI/CD** | GitHub Actions: test (255 tests) → build (GHCR) → deploy (SSH) → Cloudflare Pages |
+| **CI/CD** | GitHub Actions: test → build (GHCR) → deploy (SSH) → Cloudflare Pages |
+
+---
+
+## Signal Production (Hermes Producer)
+
+Hermes Producer runs as its own container with its own failure domain — a crash there does not affect the Zeus pipeline. Every 30 minutes it:
+
+1. Fetches EDGAR filings (8-K, 10-Q, 10-K) for S&P 500 companies via the SEC EDGAR full-text API
+2. Fetches Finnhub company-specific news (earnings, M&A)
+3. Applies a quality gate — drops signals with no `affected_tickers` and drops `urgency == LOW` noise
+4. Upserts surviving signals into Supabase `signals` table with `consumed_by_icarus = false`
+
+Icarus polls that table every pipeline cycle. When Zeus processes a signal it is marked `consumed_by_icarus = true`.
 
 ---
 
@@ -125,10 +142,10 @@ Real-time Grafana dashboard auto-refreshing every 30 seconds. Panels include:
 Every push to `main`:
 
 ```
-test (234/234) → build → push to GHCR → SSH deploy to server → Cloudflare Pages (frontend)
+test (346 passing) → build → push to GHCR → SSH deploy to Hetzner → Cloudflare Pages (frontend)
 ```
 
-All jobs must pass before deploy. The quality gate blocks shipping broken code.
+The deployed compose file is `infra/hetzner/docker-compose.prod.yml`. The root `docker-compose.prod.yml` is a local-build variant (for manual VPS runs). Edit `infra/hetzner/` for all production changes.
 
 ---
 
@@ -137,13 +154,13 @@ All jobs must pass before deploy. The quality gate blocks shipping broken code.
 | Component | Tool |
 |---|---|
 | Orchestration | `zeus.py` (plain Python — no LangGraph, no LangChain) |
-| Signal source | Hermes (Railway) — 590+ procurement suppliers |
+| Signal source | EDGAR full-text API + Finnhub (via `hermes_local.py`) |
 | Market data | yfinance — VIX, SPY, sector ETFs |
 | Macro data | FRED API (St. Louis Fed) — Fed Funds, yield curve, credit spreads, VIX |
 | Knowledge base | ChromaDB — local persistent vector store |
-| Trade memory | Supabase PostgreSQL (SQLite fallback in dev) |
+| Trade memory | Supabase PostgreSQL |
 | LLM reasoning | Claude Sonnet 4.6 — ~$0.01/call, structured JSON output |
-| Execution | Interactive Brokers via `ib_insync` |
+| Execution | Interactive Brokers via `ib_async` (paper port 4002) |
 | Alerts | Telegram Bot API |
 | Intelligence bridge | Upstash Redis — shared with SpendLens |
 | CDN | Cloudflare Pages — React dashboard |
@@ -168,8 +185,9 @@ Copy `.env.example` to `.env` and fill in:
 # LLM
 ANTHROPIC_API_KEY=sk-ant-...
 
-# Signal source
-HERMES_API_KEY=
+# Signal production
+FINNHUB_API_KEY=
+EDGAR_USER_AGENT=your.email@example.com
 
 # Cache + SpendLens bridge
 UPSTASH_REDIS_REST_URL=https://...
@@ -188,34 +206,39 @@ SUPABASE_SERVICE_ROLE_KEY=
 FRED_API_KEY=
 
 # IBKR (paper trading — leave empty until account approved)
-IBKR_HOST=127.0.0.1
-IBKR_PORT=7497
-IBKR_CLIENT_ID=1
+IB_HOST=ibgateway
+IB_PAPER_PORT=4002
 ```
 
 ### 3. Run tests
 
 ```bash
-pytest tests/ -q --timeout=30
-# 255 tests, all green (1 pre-existing shadow_learning skip)
+pytest tests/ -q
+# 346 tests, all green
 ```
 
-### 4. Bootstrap historical data (run once before paper trading)
+### 4. Produce signals (run once to seed, then runs every 30 min in prod)
 
 ```bash
-# Start the server first, then:
+python run_hermes_producer.py
+# Or one-shot: python -m agents.hermes_local
+```
+
+### 5. Bootstrap historical knowledge base (run once before paper trading)
+
+```bash
 curl -X POST http://localhost:8080/run/research/historical
 # Loads 4 years of earnings, insider trades, FRED macro, and 8-K supply chain events
 ```
 
-### 5. Start the pipeline server
+### 6. Start the pipeline server
 
 ```bash
 python main.py
-# ZEUS listens on http://localhost:8080
+# ZEUS listens on http://localhost:8080, auto-runs every 15 min
 ```
 
-### 6. Start the dashboard
+### 7. Start the dashboard
 
 ```bash
 cd dashboard/frontend && npm install && npm run dev
@@ -280,12 +303,13 @@ Live at `https://moremanamoreproblems.de/grafana/` — provisioned automatically
 
 ```
 ZEUS/
-├── main.py                      # Webhook server + standalone mode
+├── main.py                      # Webhook server + auto-run scheduler (900s)
+├── run_hermes_producer.py       # Standalone signal producer entrypoint (1800s loop)
 ├── requirements.txt
 ├── Dockerfile
 ├── agents/
 │   ├── zeus.py                  # Supreme orchestrator — owns the pipeline
-│   ├── icarus.py                # Signal watcher — Hermes API
+│   ├── icarus.py                # Signal watcher — reads from Supabase
 │   ├── hades.py                 # Compliance filter — OFAC, ESG, EU sanctions
 │   ├── artemis.py               # Macro context — VIX, regime, sector momentum
 │   ├── pythia.py                # Pattern learning — Kelly-sized positions
@@ -293,7 +317,8 @@ ZEUS/
 │   ├── ares_mock.py             # Mock execution — no IB needed
 │   ├── argus.py                 # Portfolio monitor — drawdown kill switch
 │   ├── apollo.py                # Research — KB seeding + self-improvement
-│   └── apollo_historical.py     # One-shot bootstrap — 4 years historical data
+│   ├── apollo_historical.py     # One-shot bootstrap — 4 years historical data
+│   └── hermes_local.py          # Signal fetcher — EDGAR + Finnhub → Supabase
 ├── core/
 │   ├── types.py                 # Single source of truth for all data contracts
 │   ├── knowledge_base.py        # ChromaDB wrapper (shared KB) — idempotent ingestion
@@ -309,13 +334,13 @@ ZEUS/
 │   └── frontend/                # React + Vite dashboard (Cloudflare Pages)
 ├── infra/
 │   └── hetzner/
-│       ├── docker-compose.prod.yml
+│       ├── docker-compose.prod.yml   # ← DEPLOYED FILE (deploy.yml uses this)
 │       ├── nginx.prod.conf
 │       └── grafana/             # Provisioned datasource + dashboards
 ├── knowledge/
 │   ├── agents/                  # Per-agent Senior IC skills files
 │   └── *.md                     # Trading fundamentals, macro playbooks
-├── tests/                       # 255 tests — full pipeline coverage
+├── tests/                       # 346 tests — full pipeline coverage
 └── .github/workflows/deploy.yml # CI/CD pipeline
 ```
 
@@ -334,18 +359,19 @@ ZEUS pipeline run
 
 ---
 
-## External APIs Onboarded
+## External APIs
 
-| API | Purpose | Where to get |
-|---|---|---|
-| Anthropic | Claude Haiku LLM reasoning | console.anthropic.com |
-| Hermes (Railway) | Live procurement signals — 590+ suppliers | Internal |
-| Supabase | PostgreSQL + pgvector decision store | supabase.com |
-| Upstash Redis | Cache + SpendLens intelligence bridge | upstash.com |
-| Telegram Bot | Trade alerts + drawdown notifications | t.me/BotFather |
-| FRED (St. Louis Fed) | Macro series — Fed Funds, yield curve, credit spreads | fred.stlouisfed.org/docs/api/api_key.html |
-| Interactive Brokers | Trade execution — paper + live | ibkr.com (application pending) |
-| Cloudflare Pages | React dashboard CDN | dash.cloudflare.com |
+| API | Purpose |
+|---|---|
+| Anthropic | Claude Sonnet 4.6 LLM reasoning |
+| SEC EDGAR | 8-K / 10-Q / 10-K filings — primary signal source |
+| Finnhub | Company news — earnings, M&A, analyst upgrades |
+| Supabase | PostgreSQL + pgvector decision store |
+| Upstash Redis | Cache + SpendLens intelligence bridge |
+| Telegram Bot | Trade alerts + drawdown notifications |
+| FRED (St. Louis Fed) | Macro series — Fed Funds, yield curve, credit spreads |
+| Interactive Brokers | Trade execution — paper port 4002 |
+| Cloudflare Pages | React dashboard CDN |
 
 ---
 
@@ -353,7 +379,7 @@ ZEUS pipeline run
 
 ### Done
 - [x] 8-agent pipeline (Icarus → Hades → Artemis → Pythia → ZEUS → Ares → Argus + Apollo)
-- [x] Supabase PostgreSQL — tables, pgvector, RLS disabled for service_role
+- [x] Supabase PostgreSQL — tables, pgvector, RLS for service_role
 - [x] Circuit breakers + Watchdog daemon (zero-outage design)
 - [x] Claude Sonnet 4.6 LLM reasoning in ZEUS with ChromaDB KB + ticker history
 - [x] CI/CD — GitHub Actions, auto-deploy to Hetzner via GHCR
@@ -362,36 +388,41 @@ ZEUS pipeline run
 - [x] Grafana monitoring — provisioned dashboards, live Supabase connection
 - [x] Executive dashboard — React + FastAPI WebSocket
 - [x] Upstash Redis bridge → SpendLens intelligence feed
-- [x] Apollo daily research cycle (arXiv, Hermes earnings, ticker map, self-improvement)
+- [x] Apollo daily research cycle (arXiv, ticker map, self-improvement)
 - [x] Senior IC identity framework — all agent skills files
 - [x] Config centralization — all risk params in `config/settings.py`
 - [x] Historical ingestion bootstrap — 4 years earnings, Form 4, FRED macro, EDGAR 8-K
-- [x] FRED API — Fed Funds, yield curve, credit spreads, VIX, consumer sentiment
-- [x] Cloudflare Pages — React dashboard at `pantheon-dashboard-ban.pages.dev`
-- [x] IB Gateway connected — socat bridge, delayed market data, paper account €1M
-- [x] Kafka event bus — Icarus→ZEUS signal replay, 7-day retention
-- [x] Pipeline self-scheduling — runs every 15 minutes, no n8n needed
+- [x] IB Gateway connected — headless paper trading, port 4002, autoheal watchdog
+- [x] Kafka event bus — signal replay, 7-day retention
+- [x] Pipeline self-scheduling — runs every 15 minutes autonomously
 - [x] Agent seniority system — TRAINEE → DIRECTOR progression, live trading gate
 - [x] Anthropic token/cost tracking — per-call USD cost logged to Supabase + Grafana
+- [x] Hermes replaced with local EDGAR + Finnhub fetcher (no Railway dependency)
+- [x] Hermes Producer decoupled as own container — own failure domain
+- [x] Signal quality gate — drops tickerless signals + LOW urgency noise before Supabase
+- [x] Per-ticker concentration cap + cooldown (max 1 open position per ticker, 48h cooldown)
+- [x] Atlas universe screener (Phase 2, dark — `universe_screener_enabled: false`)
+- [x] ATR-based volatility stops (Phase 3, dark — `use_atr_stops: false`)
 
 ### In Progress
+- [ ] First paper trade — pipeline is live and processing signals; waiting for a high-conviction approval
 - [ ] Trade history accumulation — agents levelling up from TRAINEE as paper trades close
 - [ ] Win rate → seniority → live trading unlock (target: Senior across all agents)
 
 ### Next
-- [ ] OpenBB swap in Artemis (DAX + EURO STOXX 50 coverage)
-- [ ] Shadow learning layer — outcome resolver, promotion gate
+- [ ] Activate Phase 2 (Atlas universe screener) once first trades close
+- [ ] Activate Phase 3 (ATR stops) after screener validation
 - [ ] Live trading — flip `paper_trading=false` once seniority gates clear
-- [ ] Phase 3 — Crypto layer via Binance EU
 
 ---
 
 ## Notes
 
-- **Germany-based**: Alpaca does not support German residents. Interactive Brokers (IBKR) is the execution layer — EU-regulated, German tax-compliant, paper trading available for free.
+- **Germany-based**: Alpaca does not support German residents. Interactive Brokers (IBKR) is the execution layer — EU-regulated, German tax-compliant.
 - **Paper trading by default**: `"paper_trading": true` and `"mock_execution": true` in settings. No real money at risk until explicitly opted in.
-- **Run historical bootstrap first**: Before paper trading, run `POST /run/research/historical` to seed the KB with 4 years of earnings patterns, insider transactions, and macro data. Pythia needs this foundation.
-- **Pattern learning needs data**: Pythia requires ~10 historical trades per context key before learned hit rates replace default sizing. Run paper trading for 4–6 weeks before the learning layer becomes meaningful.
+- **Signal production is decoupled**: `hermes-producer` container is independent from `zeus`. A producer crash does not affect the pipeline, and vice versa.
+- **Run historical bootstrap first**: Before paper trading, run `POST /run/research/historical` to seed the KB with 4 years of patterns. Pythia needs this foundation.
+- **Two compose files**: `infra/hetzner/docker-compose.prod.yml` is what deploy.yml ships. The root `docker-compose.prod.yml` uses `build:` and is for manual VPS runs only.
 - **Vault rule**: Vault money only moves one direction — into it, never back to trading. ZEUS never moves Vault money autonomously.
 
 ---
