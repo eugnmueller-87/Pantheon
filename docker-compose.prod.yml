@@ -1,0 +1,256 @@
+# Pantheon OS — Production Docker Compose (Hetzner CX21)
+# Frankfurt DC, 2 vCPU, 4 GB RAM
+#
+# Services:
+#   ibgateway   — Interactive Brokers Gateway (headless, paper port 4002)
+#   zeus        — trading pipeline (port 8080)
+#   dashboard   — FastAPI WebSocket backend (port 8081)
+#   grafana     — analytics dashboards (port 3000, proxied via nginx)
+#   redis       — local cache fallback
+#   kafka       — event bus (KRaft, no Zookeeper)
+#   nginx       — SSL termination + reverse proxy
+
+services:
+
+  # ── IB Gateway (headless paper trading) ────────────────────────
+  # ghcr.io/gnzsnz/ib-gateway:10.30 — pinned version (both stable + latest tags broken:
+  # latest claims 10.47.1c but jars folder is missing; 10.30 image has 10.30.1x jars confirmed working).
+  # Update version only after verifying jars exist: docker run --rm <image> ls /home/ibgateway/Jts/ibgateway/
+  # EXISTING_SESSION_DETECTED_ACTION=primary: dismisses any pre-existing
+  # IBKR session so headless login always succeeds unattended.
+  # Paper port 4002 is internal only — Ares/Argus connect via service name.
+  ibgateway:
+    image: ghcr.io/gnzsnz/ib-gateway:10.30
+    container_name: pantheon_ibgateway
+    restart: unless-stopped
+    labels:
+      - "autoheal=true"
+    environment:
+      - TWS_USERID=${IB_USERNAME}
+      - TWS_PASSWORD=${IB_PASSWORD}
+      - TRADING_MODE=paper
+      - EXISTING_SESSION_DETECTED_ACTION=primary
+      - TWS_ACCEPT_INCOMING=accept
+      - READ_ONLY_API=no
+      - TZ=Europe/Berlin
+      - TWOFA_DEVICE=TOTP
+      - IBC_TOTP_SECRET=${IBC_TOTP_SECRET}
+      - AUTO_RESTART_TIME=11:45 PM
+      - TWS_COLD_RESTART=06:00
+    ports:
+      - "4002:4002"
+    volumes:
+      - ibgateway_config:/home/ibgateway
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/localhost/4002 && exec 3>&-' 2>/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    networks:
+      - pantheon
+
+  # ── Autoheal — restart unhealthy containers automatically ──────
+  # Watches for containers with label autoheal=true that go unhealthy
+  # and restarts them. Recovers IBGateway when port 4002 stops responding
+  # without requiring manual intervention.
+  autoheal:
+    image: willfarrell/autoheal:latest
+    container_name: pantheon_autoheal
+    restart: always
+    environment:
+      - AUTOHEAL_CONTAINER_LABEL=autoheal
+      - AUTOHEAL_INTERVAL=30
+      - AUTOHEAL_START_PERIOD=120
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - pantheon
+
+  # ── Hermes — Market Intelligence Crawler ───────────────────────
+  # Crawls RSS/Tavily, classifies with Claude Haiku, writes to Supabase.
+  # Replaces Railway deployment — zero extra cost on existing CX21.
+  hermes:
+    image: ghcr.io/eugnmueller-87/hermes-agent:latest
+    container_name: pantheon_hermes
+    restart: always
+    ports:
+      - "8082:8080"
+    env_file: .env
+    environment:
+      - TZ=Europe/Berlin
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    networks:
+      - pantheon
+
+  # ── ZEUS Pipeline Server ────────────────────────────────────────
+  zeus:
+    build: /opt/pantheon
+    container_name: pantheon_zeus
+    restart: always
+    command: python main.py --port 8080
+    ports:
+      - "8080:8080"
+    env_file: .env
+    environment:
+      - TZ=Europe/Berlin
+    volumes:
+      - zeus_knowledge:/app/knowledge
+      - zeus_config:/app/config
+      - zeus_data:/app/data
+      - chroma_model_cache:/home/pantheon/.cache/chroma  # cache ONNX model — prevents 79MB re-download on every restart
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s  # ChromaDB model init can take 2+ min on cold start
+    depends_on:
+      - redis
+      - kafka
+    networks:
+      - pantheon
+
+  # ── Dashboard Backend ───────────────────────────────────────────
+  dashboard:
+    build: /opt/pantheon
+    container_name: pantheon_dashboard
+    restart: always
+    command: python -m uvicorn dashboard.backend.server:app --host 0.0.0.0 --port 8081
+    ports:
+      - "8081:8081"
+    env_file: .env
+    environment:
+      - TZ=Europe/Berlin
+    volumes:
+      - chroma_model_cache:/home/pantheon/.cache/chroma  # shared cache with zeus — model downloaded once
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s  # ChromaDB model init can take 2+ min on cold start
+    networks:
+      - pantheon
+
+  # ── Grafana — Analytics Dashboards ─────────────────────────────
+  # Connects directly to Supabase Postgres as datasource.
+  # No ETL needed — Grafana reads your trades/portfolio tables live.
+  grafana:
+    image: grafana/grafana:11.0.0
+    container_name: pantheon_grafana
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SERVER_ROOT_URL=https://moremanamoreproblems.de/grafana/
+      - GF_SERVER_SERVE_FROM_SUB_PATH=true
+      - GF_SERVER_PROTOCOL=http
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-changeme}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_AUTH_ANONYMOUS_ENABLED=false
+      - GF_INSTALL_PLUGINS=grafana-clock-panel
+      # Supabase Postgres connection (injected at startup via provisioning)
+      - SUPABASE_DB_HOST=${SUPABASE_DB_HOST}
+      - SUPABASE_DB_PORT=${SUPABASE_DB_PORT:-5432}
+      - SUPABASE_DB_NAME=${SUPABASE_DB_NAME:-postgres}
+      - SUPABASE_DB_USER=${SUPABASE_DB_USER:-postgres}
+      - SUPABASE_DB_PASSWORD=${SUPABASE_DB_PASSWORD}
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - pantheon
+
+  # ── Kafka (KRaft — no Zookeeper) ───────────────────────────────
+  # Heap capped at 256 MB to fit CX21 (4 GB total, 6 containers)
+  # Topics created on first use via auto.create.topics.enable=true
+  kafka:
+    image: apache/kafka:3.7.0
+    container_name: pantheon_kafka
+    restart: always
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_LOG_SEGMENT_BYTES: 67108864
+      KAFKA_HEAP_OPTS: "-Xmx256m -Xms128m"
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    networks:
+      - pantheon
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # ── Redis (local fallback cache) ────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: pantheon_redis
+    restart: always
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    networks:
+      - pantheon
+
+  # ── Nginx reverse proxy ─────────────────────────────────────────
+  nginx:
+    image: nginx:alpine
+    container_name: pantheon_nginx
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.prod.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./grafana.htpasswd:/etc/nginx/grafana.htpasswd:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      - /var/www/certbot:/var/www/certbot:ro
+    depends_on:
+      zeus:
+        condition: service_healthy
+      dashboard:
+        condition: service_healthy
+      grafana:
+        condition: service_healthy
+    networks:
+      - pantheon
+
+volumes:
+  zeus_knowledge:
+  zeus_config:
+  zeus_data:
+  chroma_model_cache:  # ChromaDB ONNX embedding model — cached across restarts to prevent CPU spike on cold start
+  grafana_data:
+  redis_data:
+  kafka_data:
+  ibgateway_config:
+
+networks:
+  pantheon:
+    driver: bridge
