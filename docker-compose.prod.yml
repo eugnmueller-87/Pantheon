@@ -72,6 +72,21 @@ services:
       - pantheon
 
 
+  # ── Hermes Producer — EDGAR + Finnhub signal fetcher (feeds Icarus via Supabase) ──
+  hermes-producer:
+    build: /opt/pantheon
+    container_name: pantheon_hermes_producer
+    restart: unless-stopped
+    command: python run_hermes_producer.py
+    env_file: .env
+    environment:
+      - TZ=Europe/Berlin
+      - HERMES_LOCAL_INTERVAL=1800
+    volumes:
+      - zeus_data:/app/data
+    networks:
+      - pantheon
+
   # ── ZEUS Pipeline Server ────────────────────────────────────────
   zeus:
     build: /opt/pantheon
