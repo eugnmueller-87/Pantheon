@@ -10,11 +10,65 @@ from __future__ import annotations
 import logging
 import time
 import uuid
+from datetime import datetime, timedelta, timezone
 
 from core.agent_knowledge import AgentKnowledgeBase
 from core.types import AgentHealth, SignalCategory, SizedSignal, TradeResult
 
 logger = logging.getLogger("ares")
+
+# How long an approved trade stays retryable before it's expired as stale.
+# 45 min: safely within a single NYSE session, safely before the gateway
+# daily restart windows (11:45 PM ET / 06:00 ET).
+PENDING_ORDER_MAX_AGE_MIN: int = 45
+
+# Max retryable rows drained per reconcile pass (prevents long stalls).
+MAX_RECONCILE_PER_CYCLE: int = 10
+
+# IB error messages that indicate a terminal rejection — never retry these.
+_TERMINAL_IB_ERRORS = (
+    "No security definition",
+    "Invalid contract",
+    "Order rejected",
+    "Insufficient funds",
+    "Buying power",
+    "margin",
+    "not found",
+    "unknown contract",
+)
+
+
+def _is_connectivity_error(exc: Exception) -> bool:
+    """True for transient IB-unreachable errors that are safe to queue and retry."""
+    msg = str(exc).lower()
+    connectivity_markers = (
+        "errno 111",
+        "connection refused",
+        "econnrefused",
+        "could not connect",
+        "not connected",
+        "timed out",
+        "timeout",
+        "circuit_open",
+        "connect call failed",
+    )
+    return any(m in msg for m in connectivity_markers)
+
+
+def _is_terminal_ib_error(exc: Exception) -> bool:
+    """True for IB order rejections that must NOT be retried."""
+    msg = str(exc).lower()
+    return any(t.lower() in msg for t in _TERMINAL_IB_ERRORS)
+
+
+def _same_session(t1: datetime, t2: datetime) -> bool:
+    """Return True if both timestamps fall within the same NYSE calendar session."""
+    # NYSE session: 09:30–16:00 ET = 13:30–20:00 UTC
+    # We compare calendar date in ET (UTC-4 / UTC-5; using UTC-4 as approximation).
+    ET_OFFSET = timedelta(hours=4)
+    d1 = (t1 - ET_OFFSET).date()
+    d2 = (t2 - ET_OFFSET).date()
+    return d1 == d2
 
 
 class AresAgent:
@@ -37,7 +91,7 @@ class AresAgent:
         self.take_profit_pct        = take_profit_pct
         self.default_account_equity = default_account_equity
         self._ib                    = None
-        self._pending: list[str]    = []
+        self._pending: list[str]    = []   # placed order IDs (for cancel_all_pending)
         self.kb = AgentKnowledgeBase("ares")
         logger.info("[ARES] %s mode — port %d", "PAPER" if paper else "LIVE", self.port)
 
@@ -50,6 +104,10 @@ class AresAgent:
         except OSError:
             return AgentHealth.DEGRADED
 
+    # ------------------------------------------------------------------
+    # Primary entry point — called from Zeus Stage 6
+    # ------------------------------------------------------------------
+
     def place(self, sized: SizedSignal) -> TradeResult:
         if not sized.affected_tickers:
             logger.warning("[ARES] No tickers in signal %s", sized.signal_id)
@@ -61,7 +119,182 @@ class AresAgent:
             return result
         except Exception as exc:
             logger.error("[ARES] Order failed: %s", exc)
+            if _is_connectivity_error(exc):
+                return self._enqueue(sized, exc)
+            # Terminal IB rejection or unknown error — do not queue.
             return self._error_result(sized.affected_tickers[0], exc)
+
+    # ------------------------------------------------------------------
+    # Retry pass — called by Zeus Stage 6 when IB is healthy
+    # ------------------------------------------------------------------
+
+    def reconcile_pending(self) -> int:
+        """
+        Drain the pending_orders queue.  Returns the number of orders processed.
+        Called at the start of Stage 6 when Ares health() == HEALTHY.
+        """
+        from core import supabase_client as db
+
+        now = datetime.now(timezone.utc)
+        rows = db.get_retryable_pending_orders(now, limit=MAX_RECONCILE_PER_CYCLE)
+        if not rows:
+            return 0
+
+        processed = 0
+        for row in rows:
+            sid = row["signal_id"]
+
+            # Expiry guards — age and session boundary
+            approved_at = datetime.fromisoformat(row["approved_at"])
+            expires_at  = datetime.fromisoformat(row["expires_at"])
+            if now >= expires_at:
+                logger.info("[ARES] Pending order %s expired (age limit)", sid)
+                db.set_pending_status(sid, "EXPIRED")
+                processed += 1
+                continue
+            if not _same_session(approved_at, now):
+                logger.info("[ARES] Pending order %s expired (session boundary)", sid)
+                db.set_pending_status(sid, "EXPIRED")
+                processed += 1
+                continue
+
+            # Idempotency — skip if already submitted by a parallel cycle
+            if row["status"] == "SUBMITTED":
+                processed += 1
+                continue
+
+            # Atomically claim the row so a concurrent cycle won't double-place
+            db.set_pending_status(
+                sid, "SUBMITTING",
+                last_attempt_at=now.isoformat(),
+            )
+
+            payload = row["payload"]
+            symbol  = row["symbol"]
+            try:
+                ib     = self._get_connection()
+                result = self._place_bracket_from_payload(ib, symbol, payload)
+                self._pending.append(result.order_id)
+                db.set_pending_status(
+                    sid, "SUBMITTED",
+                    ib_order_id=result.order_id,
+                    last_error=None,
+                )
+                logger.info("[ARES] Reconciled pending order %s → SUBMITTED ib_order=%s", sid, result.order_id)
+            except Exception as exc:
+                err_msg = str(exc)
+                if _is_terminal_ib_error(exc):
+                    logger.warning("[ARES] Pending order %s terminal rejection: %s", sid, exc)
+                    db.set_pending_status(sid, "REJECTED", last_error=err_msg)
+                elif now >= expires_at:
+                    db.set_pending_status(sid, "EXPIRED", last_error=err_msg)
+                else:
+                    # Transient — put back to PENDING for the next cycle
+                    attempts = row.get("attempts", 0) + 1
+                    db.set_pending_status(
+                        sid, "PENDING",
+                        attempts=attempts,
+                        last_error=err_msg,
+                    )
+                    logger.warning("[ARES] Pending order %s retry %d failed: %s", sid, attempts, exc)
+            processed += 1
+
+        return processed
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _enqueue(self, sized: SizedSignal, exc: Exception) -> TradeResult:
+        """Write the approved trade to pending_orders instead of dropping it."""
+        from core import supabase_client as db
+
+        symbol      = sized.affected_tickers[0]
+        is_long     = sized.category != SignalCategory.SUPPLIER_DISRUPTION
+        side        = "BUY" if is_long else "SELL"
+        approved_at = datetime.now(timezone.utc)
+        expires_at  = approved_at + timedelta(minutes=PENDING_ORDER_MAX_AGE_MIN)
+
+        payload = {
+            "signal_id":        sized.signal_id,
+            "symbol":           symbol,
+            "side":             side,
+            "position_size_pct": sized.position_size_pct,
+            "confidence":       sized.confidence,
+        }
+
+        db.enqueue_pending_order(
+            signal_id=sized.signal_id,
+            symbol=symbol,
+            side=side,
+            payload=payload,
+            approved_at=approved_at,
+            expires_at=expires_at,
+        )
+        logger.info(
+            "[ARES] Trade queued (IB unreachable) — signal=%s symbol=%s expires=%s",
+            sized.signal_id, symbol, expires_at.isoformat(),
+        )
+        return TradeResult(
+            order_id=str(uuid.uuid4())[:8],
+            symbol=symbol,
+            side=side,
+            fill_price=None,
+            qty=0,
+            status="queued",
+        )
+
+    def _place_bracket_from_payload(self, ib, symbol: str, payload: dict) -> TradeResult:
+        """Re-place a queued order from its stored payload dict."""
+        from datetime import datetime, timezone
+
+        from core.types import (
+            FilteredSignal,
+            MacroContext,
+            MarketRegime,
+            RawSignal,
+            Severity,
+        )
+
+        # Reconstruct the minimal SizedSignal needed by _place_bracket
+        raw = RawSignal(
+            signal_id=payload["signal_id"],
+            source_url="",
+            headline="(queued retry)",
+            summary="",
+            published_at=datetime.now(timezone.utc),
+            category=SignalCategory.POSITIVE_NEWS,  # direction already encoded in side
+            severity=Severity.HIGH,
+            affected_tickers=[symbol],
+        )
+        filtered = FilteredSignal(original=raw, compliance_score=1.0)
+        macro = MacroContext(
+            fetched_at=datetime.now(timezone.utc),
+            regime=MarketRegime.BULL,
+            vix=15.0,
+            sp500_1m_return=0.0,
+        )
+        sized = SizedSignal(
+            original=filtered,
+            macro=macro,
+            confidence=payload.get("confidence", 0.55),
+            position_size_pct=payload.get("position_size_pct", 0.02),
+        )
+        # Respect the stored side: override category-based direction
+        side = payload.get("side", "BUY")
+        if side == "SELL":
+            # Temporarily override so _place_bracket routes to SELL
+            sized.original.original = RawSignal(
+                signal_id=payload["signal_id"],
+                source_url="",
+                headline="(queued retry)",
+                summary="",
+                published_at=datetime.now(timezone.utc),
+                category=SignalCategory.SUPPLIER_DISRUPTION,
+                severity=Severity.HIGH,
+                affected_tickers=[symbol],
+            )
+        return self._place_bracket(ib, symbol, sized)
 
     def cancel_all_pending(self) -> None:
         try:

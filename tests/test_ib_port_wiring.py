@@ -236,9 +236,11 @@ class TestRetryDisconnect:
         ]
         assert all(cid == 2 for cid in client_ids), f"clientId drifted: {client_ids}"
 
-    def test_ares_raises_after_all_retries_exhausted(self):
-        """place() returns an error result when all 3 connect attempts fail."""
+    def test_ares_queues_after_all_retries_exhausted(self):
+        """place() enqueues the order (status='queued') when all 3 connect attempts fail
+        with a connectivity error — the approved trade is NOT lost."""
         from datetime import datetime, timezone
+        from unittest.mock import patch
 
         from core.types import (
             FilteredSignal,
@@ -269,10 +271,12 @@ class TestRetryDisconnect:
         )
 
         with patch.dict(sys.modules, {"ib_async": fake_mod}), \
-             patch("time.sleep"):
+             patch("time.sleep"), \
+             patch("core.supabase_client.enqueue_pending_order", return_value=None):
             result = agent.place(sized)
 
-        assert result.status.startswith("error")
+        # Connectivity failure → queued for retry, not silently dropped
+        assert result.status == "queued"
 
 
 # ── Early-close market hours ────────────────────────────────────────────────────

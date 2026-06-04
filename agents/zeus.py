@@ -518,14 +518,30 @@ class ZeusOrchestrator:
                 )
                 sized.position_size_pct = max_pct
 
-        # Stage 6 — Execute
-        result: TradeResult = self.cb.call(
-            "ares",
-            fn=lambda: self.ares.place(sized),
-            fallback=TradeResult(
-                order_id="failed", symbol="", side="", fill_price=None, qty=0, status="circuit_open"
-            ),
-        )
+        # Stage 6 — Execute (with pre-flight health gate and pending-order drain)
+        ares_healthy = self.ares.health() == AgentHealth.HEALTHY
+
+        if ares_healthy:
+            # Drain any previously queued approvals before placing the new one
+            try:
+                drained = self.ares.reconcile_pending()
+                if drained:
+                    logger.info("[ZEUS] Reconciled %d pending order(s) before new placement", drained)
+            except Exception as _rec_exc:
+                logger.warning("[ZEUS] reconcile_pending failed (non-fatal): %s", _rec_exc)
+
+        if ares_healthy:
+            result: TradeResult = self.cb.call(
+                "ares",
+                fn=lambda: self.ares.place(sized),
+                fallback=TradeResult(
+                    order_id="failed", symbol="", side="", fill_price=None, qty=0, status="circuit_open"
+                ),
+            )
+        else:
+            # IB is down — enqueue instead of attempting the doomed 3-retry storm
+            logger.info("[ZEUS] IB pre-flight DEGRADED — queuing approval for signal %s", sized.signal_id)
+            result = self.ares.place(sized)  # place() will hit _enqueue() via connectivity check
         run.trade_result = result
 
         trace.trade_placed = result.status not in ("circuit_open", "skipped", "error")
