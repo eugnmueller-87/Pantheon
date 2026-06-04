@@ -1,4 +1,8 @@
 # Pantheon OS — Production Docker Compose (Hetzner CX21)
+# NOTE: This file is NOT the deployed file. The deploy pipeline (deploy.yml) uses
+# infra/hetzner/docker-compose.prod.yml — edit that file for production changes.
+# This root copy uses `build: /opt/pantheon` and is suitable for manual VPS runs only.
+# Follow-up: consolidate to a single authoritative compose file to prevent drift.
 # Frankfurt DC, 2 vCPU, 4 GB RAM
 #
 # Services:
@@ -85,22 +89,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 20s
-    networks:
-      - pantheon
-
-  # ── Hermes Producer — decoupled signal fetcher ─────────────────
-  # Runs agents/hermes_local.run_cycle() every 30 min as its own process.
-  # Own failure domain: a crash here does not affect Zeus or the pipeline.
-  # Writes to Supabase `signals` table; Icarus in Zeus reads from there.
-  hermes-producer:
-    build: /opt/pantheon
-    container_name: pantheon_hermes_producer
-    restart: unless-stopped
-    command: python run_hermes_producer.py
-    env_file: .env
-    environment:
-      - TZ=Europe/Berlin
-      - HERMES_LOCAL_INTERVAL=1800
     networks:
       - pantheon
 
