@@ -116,6 +116,21 @@ services:
     networks:
       - pantheon
 
+  # ── Hermes Producer — EDGAR + Finnhub signal fetcher (feeds Icarus via Supabase) ──
+  hermes-producer:
+    image: ghcr.io/eugnmueller-87/pantheon:latest   # same image as zeus, different command
+    container_name: pantheon_hermes_producer
+    restart: unless-stopped
+    command: python run_hermes_producer.py
+    env_file: .env
+    environment:
+      - TZ=Europe/Berlin
+      - HERMES_LOCAL_INTERVAL=1800
+    volumes:
+      - zeus_data:/app/data          # shares ticker_map.json with zeus (read path)
+    networks:
+      - pantheon
+
   # ── Dashboard Backend ───────────────────────────────────────────
   dashboard:
     image: ghcr.io/eugnmueller-87/pantheon:latest
