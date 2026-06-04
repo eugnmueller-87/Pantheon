@@ -429,6 +429,70 @@ def _int_to_level_label(level_int: int) -> str:
     return _LABEL_BY_LEVEL[level_int]
 
 
+# ── Pending order queue ────────────────────────────────────────────────────────
+
+def enqueue_pending_order(
+    signal_id: str,
+    symbol: str,
+    side: str,
+    payload: dict,
+    approved_at: datetime,
+    expires_at: datetime,
+) -> Optional[dict]:
+    """Insert a new PENDING order.  Silently ignores duplicate signal_id (idempotent)."""
+    try:
+        res = (
+            get_client()
+            .table("pending_orders")
+            .upsert(
+                {
+                    "signal_id":   signal_id,
+                    "symbol":      symbol,
+                    "side":        side,
+                    "payload":     payload,
+                    "approved_at": approved_at.isoformat(),
+                    "expires_at":  expires_at.isoformat(),
+                    "status":      "PENDING",
+                },
+                on_conflict="signal_id",
+                ignore_duplicates=True,
+            )
+            .execute()
+        )
+        return res.data[0] if res.data else None
+    except Exception as exc:
+        logger.error("[SUPABASE] enqueue_pending_order failed: %s", exc)
+        return None
+
+
+def get_retryable_pending_orders(now: datetime, limit: int = 10) -> list[dict]:
+    """Return PENDING rows that have not yet expired, oldest-first."""
+    try:
+        res = (
+            get_client()
+            .table("pending_orders")
+            .select("*")
+            .eq("status", "PENDING")
+            .gt("expires_at", now.isoformat())
+            .order("approved_at", desc=False)
+            .limit(limit)
+            .execute()
+        )
+        return res.data or []
+    except Exception as exc:
+        logger.error("[SUPABASE] get_retryable_pending_orders failed: %s", exc)
+        return []
+
+
+def set_pending_status(signal_id: str, status: str, **fields) -> None:
+    """Update status (and any extra fields) for a pending_orders row."""
+    try:
+        update = {"status": status, "updated_at": datetime.now(timezone.utc).isoformat(), **fields}
+        get_client().table("pending_orders").update(update).eq("signal_id", signal_id).execute()
+    except Exception as exc:
+        logger.error("[SUPABASE] set_pending_status failed: %s", exc)
+
+
 def get_portfolio_equity_series(hours: int = 24) -> list[dict]:
     """Pull equity snapshots for the last N hours — Grafana equity chart."""
     try:
