@@ -20,7 +20,7 @@ logger = logging.getLogger("ares")
 # How long an approved trade stays retryable before it's expired as stale.
 # 45 min: safely within a single NYSE session, safely before the gateway
 # daily restart windows (11:45 PM ET / 06:00 ET).
-PENDING_ORDER_MAX_AGE_MIN: int = 45
+PENDING_ORDER_MAX_AGE_MIN: int = 120
 
 # Max retryable rows drained per reconcile pass (prevents long stalls).
 MAX_RECONCILE_PER_CYCLE: int = 10
