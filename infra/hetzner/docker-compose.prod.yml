@@ -13,14 +13,14 @@
 services:
 
   # ── IB Gateway (headless paper trading) ────────────────────────
-  # ghcr.io/gnzsnz/ib-gateway:10.30 — pinned version (both stable + latest tags broken:
-  # latest claims 10.47.1c but jars folder is missing; 10.30 image has 10.30.1x jars confirmed working).
-  # Update version only after verifying jars exist: docker run --rm <image> ls /home/ibgateway/Jts/ibgateway/
+  # ghcr.io/gnzsnz/ib-gateway:stable — tracks the stable release line (10.45.1g as of Jun 2026).
+  # Switched from pinned 10.30 — confirmed by community that :stable jars are intact and
+  # :latest has a known packaging issue (missing jars folder). Do not use :latest.
   # EXISTING_SESSION_DETECTED_ACTION=primary: dismisses any pre-existing
   # IBKR session so headless login always succeeds unattended.
   # Paper port 4002 is internal only — Ares/Argus connect via service name.
   ibgateway:
-    image: ghcr.io/gnzsnz/ib-gateway:10.30
+    image: ghcr.io/gnzsnz/ib-gateway:stable
     container_name: pantheon_ibgateway
     restart: unless-stopped
     labels:
@@ -94,21 +94,6 @@ services:
     depends_on:
       - redis
       - kafka
-    networks:
-      - pantheon
-
-  # ── Hermes Producer — EDGAR + Finnhub signal fetcher (feeds Icarus via Supabase) ──
-  hermes-producer:
-    image: ghcr.io/eugnmueller-87/pantheon:latest   # same image as zeus, different command
-    container_name: pantheon_hermes_producer
-    restart: unless-stopped
-    command: python run_hermes_producer.py
-    env_file: .env
-    environment:
-      - TZ=Europe/Berlin
-      - HERMES_LOCAL_INTERVAL=1800
-    volumes:
-      - zeus_data:/app/data          # shares ticker_map.json with zeus (read path)
     networks:
       - pantheon
 
@@ -197,10 +182,10 @@ services:
     networks:
       - pantheon
     healthcheck:
-      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1"]
-      interval: 30s
+      test: ["CMD-SHELL", "echo > /dev/tcp/localhost/9092"]
+      interval: 2m
       timeout: 10s
-      retries: 5
+      retries: 3
       start_period: 30s
 
   # ── Redis (local fallback cache) ────────────────────────────────
