@@ -427,11 +427,6 @@ class IcarusAgent:
 
         logger.info("[ICARUS] %d new signal(s) ready for Zeus.", len(signals))
 
-        if signals:
-            from core.kafka_bus import publish_raw_signal
-            for sig in signals:
-                publish_raw_signal(sig)
-
         return signals
 
     def fetch_company(self, company: str) -> list[RawSignal]:
