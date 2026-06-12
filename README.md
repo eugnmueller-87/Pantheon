@@ -18,7 +18,7 @@
 
 ---
 
-![Pantheon Agent Lineup](screenshots/Screenshot%202026-05-22%20215144.png)
+![Pantheon Agent Lineup](screenshots/ChatGPT%20Image%20Jun%2012%2C%202026%2C%2010_38_06%20PM.png)
 
 ---
 
