@@ -238,7 +238,7 @@ class AresAgent:
 
         raw_ticker  = sized.affected_tickers[0]
         symbol, exchange = _resolve_symbol_for_market(sized.supplier, raw_ticker)
-        is_long     = sized.category != SignalCategory.SUPPLIER_DISRUPTION
+        is_long     = getattr(sized, "side", None) != "SELL"
         side        = "BUY" if is_long else "SELL"
         approved_at = datetime.now(timezone.utc)
         expires_at  = approved_at + timedelta(minutes=PENDING_ORDER_MAX_AGE_MIN)
@@ -382,7 +382,10 @@ class AresAgent:
                 actual_amount, currency,
             )
 
-        is_long = sized.category != SignalCategory.SUPPLIER_DISRUPTION
+        # Long-only: always BUY on new signals — we never short stocks we don't hold.
+        # Zeus LLM can set sized.side="SELL" explicitly to close an existing long.
+        explicit_side = getattr(sized, "side", None)
+        is_long = explicit_side != "SELL"
         side    = "BUY" if is_long else "SELL"
 
         stop_price, limit_price = self._compute_stops(symbol, mid, is_long)
