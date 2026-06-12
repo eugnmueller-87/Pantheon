@@ -251,11 +251,6 @@ def _cet_offset(utc_dt: datetime) -> int:
     # Last Sunday of March
     import calendar
     last_day_mar = calendar.monthrange(y, 3)[1]
-    last_sun_mar = last_day_mar - datetime(y, 3, last_day_mar).weekday() % 7 - (
-        0 if datetime(y, 3, last_day_mar).weekday() == 6 else
-        datetime(y, 3, last_day_mar).weekday() + 1
-    )
-    # Simpler: walk back from end of month to find Sunday
     d = datetime(y, 3, last_day_mar)
     while d.weekday() != 6:
         d -= timedelta(days=1)

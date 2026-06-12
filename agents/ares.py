@@ -66,8 +66,7 @@ def _same_session(t1: datetime, t2: datetime) -> bool:
     Uses ET date for NYSE trades and CET date for XETRA trades.
     Conservative: compares both offsets and returns True only if both agree.
     """
-    ET_OFFSET  = timedelta(hours=4)   # UTC-4 EDT approximation
-    CET_OFFSET = timedelta(hours=-1)  # UTC+1 CET approximation (negative = subtract)
+    ET_OFFSET = timedelta(hours=4)   # UTC-4 EDT approximation
     d1_et  = (t1 - ET_OFFSET).date()
     d2_et  = (t2 - ET_OFFSET).date()
     d1_cet = (t1 + timedelta(hours=1)).date()
@@ -82,8 +81,8 @@ def _resolve_symbol_for_market(supplier: str, current_ticker: str) -> tuple[str,
     with exchange SMART.  If only XETRA is open and a XETRA ticker exists for
     the supplier, return the XETRA ticker with exchange XETRA.
     """
-    from main import _is_nyse_open, _is_xetra_open
     from core.supabase_client import get_ticker_for_market
+    from main import _is_nyse_open, _is_xetra_open
 
     if _is_nyse_open() or not supplier:
         return current_ticker, "SMART"
@@ -345,6 +344,7 @@ class AresAgent:
         exchange: str = "SMART",
     ) -> TradeResult:
         import math
+
         from ib_async import Stock
 
         currency = "EUR" if exchange == "XETRA" else "USD"
