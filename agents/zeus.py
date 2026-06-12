@@ -213,24 +213,9 @@ class ZeusOrchestrator:
             logger.warning("[ZEUS] Pipeline is %s — skipping run.", self.status.value)
             return []
 
-        # Fetch signals: prefer Kafka bus, fall back to direct Icarus call
-        from core.kafka_bus import consume_raw_signals
-        from core.kafka_bus import is_available as kafka_up
-        if kafka_up():
-            raw_signals = consume_raw_signals()
-            logger.info("[ZEUS] Kafka: consumed %d signal(s).", len(raw_signals))
-            if not raw_signals:
-                # Kafka up but empty — fetch directly without republishing to Kafka
-                # (icarus.fetch republishes, so we call _fetch_briefing directly)
-                try:
-                    raw_signals = self.icarus._fetch_briefing()
-                    logger.info("[ZEUS] Icarus (direct, no republish): %d signal(s).", len(raw_signals))
-                except Exception as exc:
-                    logger.warning("[ZEUS] Icarus direct fetch failed: %s", exc)
-                    raw_signals = []
-        else:
-            raw_signals = self.cb.call("icarus", fn=self.icarus.fetch, fallback=[])
-            logger.info("[ZEUS] Icarus (direct) returned %d signal(s).", len(raw_signals))
+        # Fetch signals directly from Icarus (Supabase)
+        raw_signals = self.cb.call("icarus", fn=self.icarus.fetch, fallback=[])
+        logger.info("[ZEUS] Icarus returned %d signal(s).", len(raw_signals))
 
         # Reset intra-run state so each cycle starts fresh
         self._run_approved_trades = []
@@ -1065,9 +1050,7 @@ Respond in this exact JSON format — no markdown, no fences, raw JSON only:
             self.kb.store_decision(trace)
         except Exception as exc:
             logger.warning("[ZEUS] Failed to write trace to KB: %s", exc)
-        self.bridge.push_decision(trace)           # → SpendLens Icarus AI feed
-        from core.kafka_bus import publish_decision_trace
-        publish_decision_trace(trace)              # → Kafka zeus.decision_traces (no-op if down)
+        self.bridge.push_decision(trace)
 
     def _run_seniority_evaluation(self) -> None:
         try:
