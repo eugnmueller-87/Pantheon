@@ -66,6 +66,9 @@ class ZeusConfig:
     mock_execution:               bool  = True
     min_zeus_confidence:          float = 0.55
     use_llm_reasoning:            bool  = True
+    use_debate:                   bool  = True   # bull/bear debate before Director verdict
+    debate_rounds:                int   = 1      # bull→bear pairs per signal
+    debate_max_tokens:            int   = 400    # output cap per debate call
     starting_equity:              float = 100.0  # seed capital — MilestoneManager tracks from here
     default_account_equity:       float = 100_000.0
     stop_loss_pct:                float = 0.03
@@ -118,6 +121,12 @@ class ZeusOrchestrator:
             self.config.max_open_positions_per_ticker = int(_s.get("max_open_positions_per_ticker", 1))
         if self.config.ticker_cooldown_hours == 48.0:
             self.config.ticker_cooldown_hours = float(_s.get("ticker_cooldown_hours", 48.0))
+        if self.config.use_debate is True and "use_debate" in _s:
+            self.config.use_debate = bool(_s["use_debate"])
+        if self.config.debate_rounds == 1:
+            self.config.debate_rounds = int(_s.get("debate_rounds", 1))
+        if self.config.debate_max_tokens == 400:
+            self.config.debate_max_tokens = int(_s.get("debate_max_tokens", 400))
         self.status = PipelineStatus.RUNNING
 
         # Core infrastructure
@@ -601,12 +610,20 @@ class ZeusOrchestrator:
 
         kb_context = self._build_kb_context(sized, macro, trace)
         self_critique = self._load_self_critique()
+
+        # Adversarial debate — bull builds the case, bear rebuts it (seeing the
+        # bull's argument). ZEUS reads both before adjudicating. Returns ("","")
+        # if debate is disabled or a call fails — ZEUS then reasons single-shot.
+        bull_case, bear_case = self._run_debate(sized, macro, kb_context, live_context)
+
         prompt = self._build_director_prompt(
             sized, macro, kb_context,
             live_context=live_context,
             intra_run_trades=intra_run_trades or [],
             self_critique=self_critique,
             ticker_history=ticker_history or [],
+            bull_case=bull_case,
+            bear_case=bear_case,
         )
 
         try:
@@ -616,11 +633,130 @@ class ZeusOrchestrator:
                 messages=[{"role": "user", "content": prompt}],
             )
             self._record_token_usage(response.usage, sized.affected_tickers[0] if sized.affected_tickers else "unknown")
-            return self._parse_llm_response(response.content[0].text.strip(), sized)
+            approved, reasoning, override_size = self._parse_llm_response(
+                response.content[0].text.strip(), sized
+            )
+            # Fold the debate into the auditable reasoning text (no schema change).
+            if bull_case or bear_case:
+                reasoning += (
+                    f" | DEBATE — BULL: {bull_case[:300]}"
+                    f" || BEAR: {bear_case[:300]}"
+                )
+            return approved, reasoning, override_size
         except Exception as exc:
             logger.error("[ZEUS] LLM reasoning failed: %s — defaulting to Pattern score.", exc)
             fallback_approved = sized.confidence >= self.config.min_zeus_confidence
             return fallback_approved, f"LLM call failed ({exc}). Used Pattern confidence fallback.", None
+
+    def _run_debate(
+        self,
+        sized: SizedSignal,
+        macro: MacroContext,
+        kb_context: str,
+        live_context: str = "",
+    ) -> tuple[str, str]:
+        """
+        Run a one-round adversarial debate before the Director verdict.
+
+        Bull argues the strongest case to TAKE the trade. Bear then rebuts it,
+        seeing the bull's argument (sequential, so it's genuinely adversarial
+        rather than two independent opinions).
+
+        Strictly additive: returns ("", "") if debate is disabled or any call
+        fails — ZEUS then falls back to single-shot reasoning, exactly as before.
+        The debate produces evidence; ZEUS remains the sole judge.
+        """
+        if not self.config.use_debate:
+            return "", ""
+
+        ticker = sized.affected_tickers[0] if sized.affected_tickers else "unknown"
+
+        bull_case = ""
+        bear_case = ""
+        try:
+            bull_prompt = self._build_debate_prompt(
+                "BULL", sized, macro, kb_context, live_context, opponent_case=""
+            )
+            bull_resp = self._claude.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=self.config.debate_max_tokens,
+                messages=[{"role": "user", "content": bull_prompt}],
+            )
+            self._record_token_usage(bull_resp.usage, f"{ticker}:bull")
+            bull_case = bull_resp.content[0].text.strip()
+        except Exception as exc:
+            logger.warning("[ZEUS] Bull debate call failed: %s — proceeding without it.", exc)
+            return "", ""
+
+        try:
+            bear_prompt = self._build_debate_prompt(
+                "BEAR", sized, macro, kb_context, live_context, opponent_case=bull_case
+            )
+            bear_resp = self._claude.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=self.config.debate_max_tokens,
+                messages=[{"role": "user", "content": bear_prompt}],
+            )
+            self._record_token_usage(bear_resp.usage, f"{ticker}:bear")
+            bear_case = bear_resp.content[0].text.strip()
+        except Exception as exc:
+            logger.warning("[ZEUS] Bear debate call failed: %s — using bull case only.", exc)
+
+        logger.info(
+            "[ZEUS] Debate complete for %s — bull=%d chars, bear=%d chars",
+            ticker, len(bull_case), len(bear_case),
+        )
+        return bull_case, bear_case
+
+    def _build_debate_prompt(
+        self,
+        side: str,
+        sized: SizedSignal,
+        macro: MacroContext,
+        kb_context: str,
+        live_context: str,
+        opponent_case: str,
+    ) -> str:
+        """Build a bull- or bear-side debate prompt. `side` is 'BULL' or 'BEAR'."""
+        live_block = f"\nLIVE FUNDAMENTALS (Apollo):\n{live_context}\n" if live_context else ""
+
+        if side == "BULL":
+            role = (
+                "You are the BULL analyst. Build the strongest evidence-based case to TAKE "
+                "this long trade. Ground every claim in the signal, the macro regime, the live "
+                "fundamentals, and KB precedent below. Do not invent numbers. End by naming the "
+                "single biggest risk to your own thesis — the honest bull names the bear's best shot."
+            )
+            opponent_block = ""
+        else:
+            role = (
+                "You are the BEAR analyst. The bull's case is below. Rebut it. Argue the strongest "
+                "evidence-based case to REJECT or skip this trade: why the event may not move this "
+                "ticker as claimed, why the regime or sizing could be wrong, what failure modes the "
+                "bull ignored. Ground every claim in the evidence. Do not invent numbers."
+            )
+            opponent_block = f"\n--- BULL'S CASE (rebut this) ---\n{opponent_case}\n"
+
+        return f"""{role}
+
+═══════════════════════════════════════════════
+SIGNAL
+═══════════════════════════════════════════════
+Headline:  {sized.headline}
+Supplier:  {sized.supplier}
+Category:  {sized.category.value}
+Severity:  {sized.severity.value}
+Tickers:   {sized.affected_tickers}
+
+MACRO: regime={macro.regime.value} | VIX={macro.vix:.1f} | SPY 1m={macro.sp500_1m_return*100:.1f}%
+QUANT: Pythia confidence={sized.confidence:.2f}, proposed size={sized.position_size_pct*100:.2f}%
+{live_block}
+═══════════════════════════════════════════════
+KNOWLEDGE BASE & PRECEDENT
+═══════════════════════════════════════════════
+{kb_context}
+{opponent_block}
+Write 3-5 tight sentences. No preamble, no JSON — just your argument."""
 
     def _record_token_usage(self, usage, symbol: str) -> None:
         # Sonnet 4.6 pricing: $3/MTok input, $15/MTok output
@@ -702,6 +838,8 @@ class ZeusOrchestrator:
         intra_run_trades: Optional[list] = None,
         self_critique: str = "",
         ticker_history: Optional[list] = None,
+        bull_case: str = "",
+        bear_case: str = "",
     ) -> str:
         """Assemble the full Director governance prompt from signal + portfolio state."""
         open_positions  = self.argus.open_position_count()
@@ -766,6 +904,23 @@ LIVE COMPANY INTELLIGENCE (fetched by Apollo right now)
 {live_context}
 """
 
+        # Adversarial debate — bull built the case, bear rebutted it
+        debate_section = ""
+        if bull_case or bear_case:
+            debate_section = f"""
+═══════════════════════════════════════════════
+ANALYST DEBATE (your team argued both sides before you decide)
+═══════════════════════════════════════════════
+BULL — case to take the trade:
+{bull_case or '(no bull case produced)'}
+
+BEAR — case to reject the trade:
+{bear_case or '(no bear case produced)'}
+
+Weigh both. Do not simply side with whoever wrote more. The bear's strongest
+point is what you must answer before approving.
+"""
+
         return f"""You are ZEUS — Director of Portfolio Management for Pantheon OS, an autonomous trading operation.
 
 Your role is not to rubber-stamp your analysts' recommendations. Your role is to govern the portfolio with genuine intelligence. You have memory. You know what you approved 5 minutes ago. You know your own failure patterns. You use all of that.
@@ -786,7 +941,7 @@ Supplier:   {sized.supplier}
 Category:   {sized.category.value}
 Severity:   {sized.severity.value}
 Tickers:    {sized.affected_tickers}
-{live_context_section}
+{live_context_section}{debate_section}
 ═══════════════════════════════════════════════
 TEAM ASSESSMENT SUMMARY
 ═══════════════════════════════════════════════
@@ -825,6 +980,8 @@ Before deciding, you must address:
 4. ASSUMPTION STRESS TEST: What would have to be true for Pythia's confidence to be wrong? Is the regime classification reliable right now? Is the sample size sufficient?
 
 5. ASYMMETRY: Is the risk/reward favorable? A 3% stop vs 6% target requires >33% win rate. Does the data support that for this specific ticker and signal type?
+
+6. DEBATE RESOLUTION: Your bull and bear analysts argued above. State the bear's strongest single objection, then decide whether it is disqualifying or already priced in. Do not approve while leaving the bear's best point unanswered.
 
 Based on this, make your final decision.
 

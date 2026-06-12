@@ -39,6 +39,7 @@ services:
       - TWS_COLD_RESTART=
       - TWOFA_TIMEOUT_ACTION=restart
       - RELOGIN_AFTER_TWOFA_TIMEOUT=yes
+      - TRUSTED_IPS=172.19.0.0/24
     ports:
       - "4002:4002"
     volumes:

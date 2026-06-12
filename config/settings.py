@@ -32,6 +32,13 @@ _DEFAULTS: dict[str, Any] = {
     # Risk parameters — Ares bracket order
     "stop_loss_pct": 0.03,        # 3% stop
     "take_profit_pct": 0.06,      # 6% target (2:1 R/R)
+    # ZEUS bull/bear debate — adversarial sub-step before the Director verdict.
+    # Bull argues to take the trade, Bear rebuts (sees the bull's case), then
+    # ZEUS adjudicates with both arguments in context. Strictly additive: if a
+    # debate call fails, ZEUS falls back to single-shot reasoning.
+    "use_debate": True,            # master switch — False reverts to single-shot
+    "debate_rounds": 1,            # bull→bear pairs per signal (1 to start)
+    "debate_max_tokens": 400,      # output cap per debate call
     # Confidence thresholds
     "zeus_min_confidence": 0.55,
     "pythia_default_confidence": 0.55,
