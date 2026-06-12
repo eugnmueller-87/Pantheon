@@ -62,13 +62,38 @@ def _is_terminal_ib_error(exc: Exception) -> bool:
 
 
 def _same_session(t1: datetime, t2: datetime) -> bool:
-    """Return True if both timestamps fall within the same NYSE calendar session."""
-    # NYSE session: 09:30–16:00 ET = 13:30–20:00 UTC
-    # We compare calendar date in ET (UTC-4 / UTC-5; using UTC-4 as approximation).
-    ET_OFFSET = timedelta(hours=4)
-    d1 = (t1 - ET_OFFSET).date()
-    d2 = (t2 - ET_OFFSET).date()
-    return d1 == d2
+    """Return True if both timestamps fall within the same trading session.
+    Uses ET date for NYSE trades and CET date for XETRA trades.
+    Conservative: compares both offsets and returns True only if both agree.
+    """
+    ET_OFFSET  = timedelta(hours=4)   # UTC-4 EDT approximation
+    CET_OFFSET = timedelta(hours=-1)  # UTC+1 CET approximation (negative = subtract)
+    d1_et  = (t1 - ET_OFFSET).date()
+    d2_et  = (t2 - ET_OFFSET).date()
+    d1_cet = (t1 + timedelta(hours=1)).date()
+    d2_cet = (t2 + timedelta(hours=1)).date()
+    return d1_et == d2_et or d1_cet == d2_cet
+
+
+def _resolve_symbol_for_market(supplier: str, current_ticker: str) -> tuple[str, str]:
+    """Return (ticker, exchange) to use based on which market is currently open.
+
+    If NYSE is open (or no supplier name available), return the original ticker
+    with exchange SMART.  If only XETRA is open and a XETRA ticker exists for
+    the supplier, return the XETRA ticker with exchange XETRA.
+    """
+    from main import _is_nyse_open, _is_xetra_open
+    from core.supabase_client import get_ticker_for_market
+
+    if _is_nyse_open() or not supplier:
+        return current_ticker, "SMART"
+
+    if _is_xetra_open():
+        xetra_ticker = get_ticker_for_market(supplier, preferred_exchange="XETRA")
+        if xetra_ticker:
+            return xetra_ticker, "XETRA"
+
+    return current_ticker, "SMART"
 
 
 class AresAgent:
@@ -112,9 +137,11 @@ class AresAgent:
         if not sized.affected_tickers:
             logger.warning("[ARES] No tickers in signal %s", sized.signal_id)
             return self._null_result()
+        raw_ticker = sized.affected_tickers[0]
+        symbol, exchange = _resolve_symbol_for_market(sized.supplier, raw_ticker)
         try:
             ib     = self._get_connection()
-            result = self._place_bracket(ib, sized.affected_tickers[0], sized)
+            result = self._place_bracket(ib, symbol, sized, exchange=exchange)
             self._pending.append(result.order_id)
             return result
         except Exception as exc:
@@ -122,7 +149,7 @@ class AresAgent:
             if _is_connectivity_error(exc):
                 return self._enqueue(sized, exc)
             # Terminal IB rejection or unknown error — do not queue.
-            return self._error_result(sized.affected_tickers[0], exc)
+            return self._error_result(symbol, exc)
 
     # ------------------------------------------------------------------
     # Retry pass — called by Zeus Stage 6 when IB is healthy
@@ -209,18 +236,20 @@ class AresAgent:
         """Write the approved trade to pending_orders instead of dropping it."""
         from core import supabase_client as db
 
-        symbol      = sized.affected_tickers[0]
+        raw_ticker  = sized.affected_tickers[0]
+        symbol, exchange = _resolve_symbol_for_market(sized.supplier, raw_ticker)
         is_long     = sized.category != SignalCategory.SUPPLIER_DISRUPTION
         side        = "BUY" if is_long else "SELL"
         approved_at = datetime.now(timezone.utc)
         expires_at  = approved_at + timedelta(minutes=PENDING_ORDER_MAX_AGE_MIN)
 
         payload = {
-            "signal_id":        sized.signal_id,
-            "symbol":           symbol,
-            "side":             side,
+            "signal_id":         sized.signal_id,
+            "symbol":            symbol,
+            "exchange":          exchange,
+            "side":              side,
             "position_size_pct": sized.position_size_pct,
-            "confidence":       sized.confidence,
+            "confidence":        sized.confidence,
         }
 
         db.enqueue_pending_order(
@@ -294,7 +323,10 @@ class AresAgent:
                 severity=Severity.HIGH,
                 affected_tickers=[symbol],
             )
-        return self._place_bracket(ib, symbol, sized)
+        # Reconcile re-uses the exchange that was active when the order was queued.
+        # The symbol in the payload is already the exchange-specific ticker (e.g. SIE.DE).
+        exchange = payload.get("exchange", "SMART")
+        return self._place_bracket(ib, symbol, sized, exchange=exchange)
 
     def cancel_all_pending(self) -> None:
         try:
@@ -305,12 +337,20 @@ class AresAgent:
         except Exception as exc:
             logger.error("[ARES] cancel_all_pending failed: %s", exc)
 
-    def _place_bracket(self, ib, symbol: str, sized: SizedSignal) -> TradeResult:
+    def _place_bracket(
+        self,
+        ib,
+        symbol: str,
+        sized: SizedSignal,
+        exchange: str = "SMART",
+    ) -> TradeResult:
+        import math
         from ib_async import Stock
-        contract = Stock(symbol, "SMART", "USD")
+
+        currency = "EUR" if exchange == "XETRA" else "USD"
+        contract = Stock(symbol, exchange, currency)
         ib.qualifyContracts(contract)
 
-        import math
         # Request delayed data (no live subscription on paper account)
         ib.reqMarketDataType(3)  # 3 = delayed, 4 = delayed-frozen
         ticker = ib.reqMktData(contract, "", False, False)
@@ -327,7 +367,21 @@ class AresAgent:
         account_val = self._get_account_value(ib)
         if account_val <= 0:
             raise ValueError(f"Invalid account equity: {account_val}")
-        qty     = max(1, int(account_val * sized.position_size_pct / mid))
+
+        intended_amount = account_val * sized.position_size_pct
+        qty = max(1, int(intended_amount / mid))
+        actual_amount = qty * mid
+
+        # Warn when forced min-qty overshoots the intended allocation significantly
+        if qty == 1 and actual_amount > intended_amount * 1.5:
+            logger.warning(
+                "[ARES] Position oversized — %s: intended %.0f %s (%.1f%%) → actual %.0f %s (1 share). "
+                "Signal quality justified the trade.",
+                symbol, intended_amount, currency,
+                sized.position_size_pct * 100,
+                actual_amount, currency,
+            )
+
         is_long = sized.category != SignalCategory.SUPPLIER_DISRUPTION
         side    = "BUY" if is_long else "SELL"
 
@@ -338,8 +392,10 @@ class AresAgent:
             ib.placeOrder(contract, o)
 
         order_id = str(bracket[0].orderId)
-        logger.info("[ARES] %s %d %s @ %.2f | SL=%.2f TP=%.2f | id=%s",
-                    side, qty, symbol, mid, stop_price, limit_price, order_id)
+        logger.info(
+            "[ARES] %s %d %s @ %.2f %s | SL=%.2f TP=%.2f | exchange=%s | id=%s",
+            side, qty, symbol, mid, currency, stop_price, limit_price, exchange, order_id,
+        )
         return TradeResult(
             order_id=order_id, symbol=symbol, side=side,
             fill_price=mid, qty=qty,
