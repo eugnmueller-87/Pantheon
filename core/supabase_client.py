@@ -307,19 +307,46 @@ def search_knowledge(
 # ── Ticker map ─────────────────────────────────────────────────────────────────
 
 def get_ticker(supplier_name: str) -> Optional[str]:
-    """Look up ticker symbol for a supplier name."""
+    """Look up ticker for a supplier — prefers NYSE/NASDAQ over OTC, ignores XETRA."""
+    return get_ticker_for_market(supplier_name, preferred_exchange=None)
+
+
+def get_ticker_for_market(
+    supplier_name: str,
+    preferred_exchange: Optional[str],
+) -> Optional[str]:
+    """Return the best ticker for supplier_name on the given exchange.
+
+    Priority:
+      1. preferred_exchange exact match (e.g. 'XETRA')
+      2. NYSE → NASDAQ → OTC fallback chain
+      3. Whatever is available if none of the above match
+    Returns None if supplier is unknown.
+    """
     try:
         res = (
             get_client()
             .table("ticker_map")
-            .select("ticker")
+            .select("ticker, exchange")
             .eq("supplier_name", supplier_name)
-            .maybe_single()
             .execute()
         )
-        return res.data["ticker"] if res.data else None
+        rows = res.data or []
+        if not rows:
+            return None
+
+        by_exchange = {r["exchange"]: r["ticker"] for r in rows}
+
+        if preferred_exchange and preferred_exchange in by_exchange:
+            return by_exchange[preferred_exchange]
+
+        for fallback in ("NYSE", "NASDAQ", "OTC"):
+            if fallback in by_exchange:
+                return by_exchange[fallback]
+
+        return rows[0]["ticker"]
     except Exception as exc:
-        logger.error("[SUPABASE] get_ticker failed: %s", exc)
+        logger.error("[SUPABASE] get_ticker_for_market failed: %s", exc)
         return None
 
 
@@ -333,7 +360,7 @@ def upsert_ticker(supplier_name: str, ticker: str, exchange: str, source: str = 
             "source":        source,
             "verified":      False,
             "updated_at":    datetime.now(timezone.utc).isoformat(),
-        }, on_conflict="supplier_name").execute()
+        }, on_conflict="supplier_name,exchange").execute()
     except Exception as exc:
         logger.error("[SUPABASE] upsert_ticker failed: %s", exc)
 

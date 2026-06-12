@@ -243,6 +243,32 @@ def _edt_offset(utc_dt: datetime) -> int:
     return -4 if dst_start <= utc_dt.replace(tzinfo=None) < dst_end else -5
 
 
+def _cet_offset(utc_dt: datetime) -> int:
+    """Return CET UTC offset: +2 (CEST, summer) or +1 (CET, winter).
+    CEST starts last Sunday of March, ends last Sunday of October.
+    """
+    y = utc_dt.year
+    # Last Sunday of March
+    import calendar
+    last_day_mar = calendar.monthrange(y, 3)[1]
+    last_sun_mar = last_day_mar - datetime(y, 3, last_day_mar).weekday() % 7 - (
+        0 if datetime(y, 3, last_day_mar).weekday() == 6 else
+        datetime(y, 3, last_day_mar).weekday() + 1
+    )
+    # Simpler: walk back from end of month to find Sunday
+    d = datetime(y, 3, last_day_mar)
+    while d.weekday() != 6:
+        d -= timedelta(days=1)
+    dst_start = d.replace(hour=2)
+    # Last Sunday of October
+    last_day_oct = calendar.monthrange(y, 10)[1]
+    d = datetime(y, 10, last_day_oct)
+    while d.weekday() != 6:
+        d -= timedelta(days=1)
+    dst_end = d.replace(hour=3)
+    return +2 if dst_start <= utc_dt.replace(tzinfo=None) < dst_end else +1
+
+
 # NYSE holidays — fixed dates only (observed rules applied: if holiday falls
 # on Saturday the prior Friday is observed; Sunday → following Monday).
 # Extend this set each December for the coming year. No external dependency.
@@ -257,7 +283,6 @@ _NYSE_HOLIDAYS = {
     (2026, 11, 26), (2026, 12, 25),
 }
 
-
 # NYSE early-close days (13:00 ET close) — day before Independence Day,
 # day after Thanksgiving, Christmas Eve when not a full holiday.
 # Extend this set each December for the coming year. No external dependency.
@@ -268,9 +293,32 @@ _NYSE_EARLY_CLOSE = {
     (2026, 7, 2), (2026, 11, 27), (2026, 12, 24),
 }
 
+# XETRA holidays (Frankfurt Stock Exchange public holidays).
+# Extend this set each December for the coming year.
+_XETRA_HOLIDAYS = {
+    # 2025
+    (2025, 1, 1),   # New Year's Day
+    (2025, 4, 18),  # Good Friday
+    (2025, 4, 21),  # Easter Monday
+    (2025, 5, 1),   # Labour Day
+    (2025, 12, 24), # Christmas Eve (early close / closed)
+    (2025, 12, 25), # Christmas Day
+    (2025, 12, 26), # Boxing Day
+    (2025, 12, 31), # New Year's Eve (early close / closed)
+    # 2026
+    (2026, 1, 1),   # New Year's Day
+    (2026, 4, 3),   # Good Friday
+    (2026, 4, 6),   # Easter Monday
+    (2026, 5, 1),   # Labour Day
+    (2026, 12, 24), # Christmas Eve
+    (2026, 12, 25), # Christmas Day
+    (2026, 12, 26), # Boxing Day
+    (2026, 12, 31), # New Year's Eve
+}
 
-def _is_market_open() -> bool:
-    """Returns True if NYSE is currently open for regular trading (Mon–Fri 09:30–16:00 ET, 13:00 on half-days)."""
+
+def _is_nyse_open() -> bool:
+    """True if NYSE is currently open for regular trading (Mon–Fri 09:30–16:00 ET)."""
     now_utc = datetime.now(timezone.utc)
     now_et  = now_utc + timedelta(hours=_edt_offset(now_utc))
 
@@ -281,10 +329,42 @@ def _is_market_open() -> bool:
     if today in _NYSE_HOLIDAYS:
         return False
 
-    open_time = now_et.replace(hour=9, minute=30, second=0, microsecond=0)
+    open_time  = now_et.replace(hour=9, minute=30, second=0, microsecond=0)
     close_hour = 13 if today in _NYSE_EARLY_CLOSE else 16
     close_time = now_et.replace(hour=close_hour, minute=0, second=0, microsecond=0)
     return open_time <= now_et < close_time
+
+
+def _is_xetra_open() -> bool:
+    """True if XETRA is currently open for regular trading (Mon–Fri 08:00–17:30 CET/CEST)."""
+    now_utc  = datetime.now(timezone.utc)
+    now_cet  = now_utc + timedelta(hours=_cet_offset(now_utc))
+
+    if now_cet.weekday() >= 5:
+        return False
+
+    today = (now_cet.year, now_cet.month, now_cet.day)
+    if today in _XETRA_HOLIDAYS:
+        return False
+
+    open_time  = now_cet.replace(hour=8,  minute=0,  second=0, microsecond=0)
+    close_time = now_cet.replace(hour=17, minute=30, second=0, microsecond=0)
+    return open_time <= now_cet < close_time
+
+
+# Keep the old name as an alias so existing callers (tests, webhooks) don't break.
+_is_market_open = _is_nyse_open
+
+
+def _active_market() -> str | None:
+    """Return which market is currently open: 'NYSE', 'XETRA', or None.
+    NYSE takes priority during the overlap window (13:30–17:30 UTC in summer).
+    """
+    if _is_nyse_open():
+        return "NYSE"
+    if _is_xetra_open():
+        return "XETRA"
+    return None
 
 
 def _auto_run_loop(interval_seconds: int):
@@ -293,12 +373,13 @@ def _auto_run_loop(interval_seconds: int):
     time.sleep(30)  # give Zeus time to fully initialise before first run
     while True:
         try:
-            if not _is_market_open():
-                logger.info("[MAIN] Auto-run skipped — market closed")
+            market = _active_market()
+            if market is None:
+                logger.info("[MAIN] Auto-run skipped — all markets closed")
             elif _zeus and _zeus.status.value != "halted":
                 if _run_lock.acquire(blocking=False):
                     try:
-                        logger.info("[MAIN] Auto-run triggered")
+                        logger.info("[MAIN] Auto-run triggered — market=%s", market)
                         runs = _zeus.run_once()
                         logger.info("[MAIN] Auto-run complete — %d signal(s) processed", len(runs))
                     finally:
