@@ -1,4 +1,6 @@
-# Pantheon OS — Autonomous Trading Orchestrator
+# Pantheon OS — A Multi-Agent Orchestration System
+
+*An engineering study in coordinating 8 autonomous agents under a single orchestrator — built and exercised in the trading domain because it forces the hard problems: strict data contracts, fault isolation, graceful degradation, and non-negotiable safety limits.*
 
 ![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=flat&logo=python&logoColor=white)
 ![Tests](https://img.shields.io/badge/Tests-346%20passing-brightgreen?style=flat)
@@ -14,11 +16,23 @@
 ![Cloudflare](https://img.shields.io/badge/CDN-Cloudflare%20Pages-F38020?style=flat&logo=cloudflare&logoColor=white)
 ![FRED](https://img.shields.io/badge/Macro-FRED%20API-003087?style=flat)
 
-> **8-agent autonomous trading system. ZEUS is the supreme orchestrator — all agents report to it. Fully deployed on Hetzner, paper trading live, self-scheduling every 15 minutes. Signal production runs as a separate decoupled container (Hermes Producer) writing EDGAR + Finnhub intelligence directly into Supabase every 30 minutes.**
+> **An 8-agent pipeline coordinated by a single orchestrator (ZEUS), deployed on Hetzner and self-scheduling every 15 minutes.** The interesting part is the *engineering*: one owner of control flow, agents that never call each other, a single typed data contract between stages, per-agent circuit breakers, a health watchdog, and hard kill-switches at every stage. Trading is the proving ground — **paper trading only, no real money at risk** (see [Scope & Safety](#scope--safety)). Signal production is a separate, decoupled container with its own failure domain.
 
 ---
 
 ![Pantheon Agent Lineup](screenshots/ChatGPT%20Image%20Jun%2012%2C%202026%2C%2010_38_06%20PM.png)
+
+---
+
+## Scope & Safety
+
+**This is a portfolio engineering project, not an investment vehicle.** It exists to demonstrate how to build and operate a non-trivial multi-agent system safely — the trading domain is the test harness, not the point.
+
+- **No real money.** Runs in paper-trading mode (`paper_trading: true`, `mock_execution: true`). The live-trading path exists but is gated behind explicit opt-in *and* an agent-seniority unlock; it is off.
+- **Safety is a first-class feature, not an afterthought.** Every stage can halt the pipeline: compliance kills, macro suppression, a drawdown circuit breaker, per-ticker concentration caps, and a manual `/halt`. These exist to show defensive system design — see [Pipeline Kill Switches](#pipeline-kill-switches).
+- **What it's meant to show:** orchestration of independent agents, strict typed contracts between components, fault isolation, observability (Grafana + health checks), and a real CI/CD-to-VPS deployment — transferable to any agentic system, trading or not.
+
+If you're evaluating this as engineering, the files worth reading are [`agents/zeus.py`](agents/zeus.py) (the orchestrator), [`core/types.py`](core/types.py) (the data contract), and [`core/circuit_breaker.py`](core/circuit_breaker.py) + [`core/watchdog.py`](core/watchdog.py) (the resilience layer).
 
 ---
 
@@ -101,7 +115,7 @@ Real-time Grafana dashboard auto-refreshing every 30 seconds. Panels include:
 | 2 | **Hades** | Lord of the underworld — judges who passes | Compliance firewall. OFAC, EU sanctions (BaFin/Reg 833/2014), ESG sector flags, LkSG violations → hard kill or severity downgrade. Full audit trail. |
 | 3 | **Artemis** | Goddess of the hunt — tracks conditions, picks the moment | Fetches VIX, S&P 500 1-month return, and 6 sector ETFs. Classifies market regime (bull/bear/sideways). Suppresses signals that conflict with macro environment. 15-min cache. |
 | 4 | **Pythia** | Oracle of Delphi — reads patterns, predicts outcomes | Learning agent. Every signal → outcome in Supabase. Derives position size from historical hit rates per `{category}×{regime}×{VIX band}`. Kelly-inspired sizing (capped at 5%). |
-| 5 | **ZEUS** | King of Olympus — final word | LLM reasoning via Claude Sonnet. Queries ChromaDB knowledge base. Approves, resizes, or rejects trades with structured JSON rationale. |
+| 5 | **ZEUS** | King of Olympus — the orchestrator | The only component that imports the agents and owns control flow. Runs the LLM reasoning step (Claude Sonnet) over the ChromaDB knowledge base, then approves, resizes, or rejects with a structured JSON rationale. |
 | 6 | **Ares** | God of decisive action — executes the strike | Places bracket orders on Interactive Brokers via `ib_async`. Entry + 3% stop-loss + 6% take-profit. Paper port 4002. |
 | 7 | **Argus** | Hundred-eyed giant — watches everything, never sleeps | Tracks portfolio equity and drawdown in real time. Emergency halt + Telegram alert if drawdown ≥ 8%. Backfills closed-trade P&L into Pythia and ChromaDB. |
 | 8 | **Apollo** | God of knowledge and truth — the librarian | Runs daily: ingests arXiv q-fin papers, maintains the live ticker map, runs the self-improvement loop. One-shot historical bootstrap loads 4 years of data before paper trading begins. |
@@ -308,7 +322,7 @@ ZEUS/
 ├── requirements.txt
 ├── Dockerfile
 ├── agents/
-│   ├── zeus.py                  # Supreme orchestrator — owns the pipeline
+│   ├── zeus.py                  # Orchestrator — owns control flow + the pipeline
 │   ├── icarus.py                # Signal watcher — reads from Supabase
 │   ├── hades.py                 # Compliance filter — OFAC, ESG, EU sanctions
 │   ├── artemis.py               # Macro context — VIX, regime, sector momentum
