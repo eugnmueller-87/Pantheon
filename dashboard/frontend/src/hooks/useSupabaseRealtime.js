@@ -23,6 +23,7 @@ export const QK = {
   agentHealth:   ['sb', 'agent_health'],
   seniority:     ['sb', 'agent_seniority'],
   exp:           ['sb', 'agent_exp'],
+  llm:           ['sb', 'llm_usage'],
 }
 
 function upsertById(list, row, idKey) {
@@ -61,6 +62,8 @@ export function useSupabaseRealtime() {
         .then(({ data }) => seed(QK.equity, data))
       supabase.from('agent_health').select('*').order('checked_at', { ascending: false }).limit(20)
         .then(({ data }) => seed(QK.agentHealth, data))
+      supabase.from('llm_usage').select('*').order('recorded_at', { ascending: false }).limit(500)
+        .then(({ data }) => seed(QK.llm, data))
       supabase.from('agent_seniority').select('*')
         .then(({ data }) => seed(QK.seniority, data))
       // agent_exp may not exist until Phase 3 migration is applied — tolerate 404.
@@ -85,6 +88,9 @@ export function useSupabaseRealtime() {
 
         .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'agent_health' },
           ({ new: row }) => qc.setQueryData(QK.agentHealth, prev => upsertById(prev, row, 'agent_name').slice(0, 20)))
+
+        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'llm_usage' },
+          ({ new: row }) => qc.setQueryData(QK.llm, prev => [row, ...(prev || [])].slice(0, 1000)))
 
         // Seniority promotions — the level-up trigger
         .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'agent_seniority' },
