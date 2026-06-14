@@ -239,7 +239,7 @@ There was also a four-way split: `ares.py` hardcoded `IB_PAPER_PORT = 4004`, `ze
 
 | What | Status |
 |---|---|
-| All containers running (Zeus, IB Gateway, Grafana, Kafka, Redis, Dashboard, Nginx) | ✓ |
+| All containers running (Zeus, IB Gateway, Grafana, Redis, Dashboard, Nginx) | ✓ |
 | IB Gateway connected — paper account €1M | ✓ |
 | Pipeline auto-running every 15 minutes | ✓ |
 | Trades executing (paper) — GOOGL first trade placed | ✓ |

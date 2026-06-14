@@ -11,7 +11,6 @@
 ![Docker](https://img.shields.io/badge/Docker-GHCR-2496ED?style=flat&logo=docker&logoColor=white)
 ![Supabase](https://img.shields.io/badge/DB-Supabase-3ECF8E?style=flat&logo=supabase&logoColor=white)
 ![Redis](https://img.shields.io/badge/Cache-Upstash%20Redis-DC382D?style=flat&logo=redis&logoColor=white)
-![Kafka](https://img.shields.io/badge/Events-Kafka-231F20?style=flat&logo=apachekafka&logoColor=white)
 ![Grafana](https://img.shields.io/badge/Monitoring-Grafana-F46800?style=flat&logo=grafana&logoColor=white)
 ![Cloudflare](https://img.shields.io/badge/CDN-Cloudflare%20Pages-F38020?style=flat&logo=cloudflare&logoColor=white)
 ![FRED](https://img.shields.io/badge/Macro-FRED%20API-003087?style=flat)
@@ -128,7 +127,7 @@ Real-time Grafana dashboard auto-refreshing every 30 seconds. Panels include:
 |---|---|
 | **Server** | Hetzner VPS — Ubuntu 24.04, 2 vCPU, 4 GB RAM (`187.124.14.81`) |
 | **Domain** | `moremanamoreproblems.de` → SSL via Let's Encrypt |
-| **Containers** | `zeus` · `hermes-producer` · `dashboard` · `grafana` · `ibgateway` · `redis` · `kafka` · `nginx` · `autoheal` |
+| **Containers** | `zeus` · `hermes-producer` · `dashboard` · `grafana` · `ibgateway` · `redis` · `nginx` · `autoheal` |
 | **Image registry** | GitHub Container Registry (`ghcr.io/eugnmueller-87/pantheon`) |
 | **Database** | Supabase (PostgreSQL + pgvector) |
 | **Cache** | Upstash Redis — shared with SpendLens via RedisBridge |
@@ -407,7 +406,6 @@ ZEUS pipeline run
 - [x] Config centralization — all risk params in `config/settings.py`
 - [x] Historical ingestion bootstrap — 4 years earnings, Form 4, FRED macro, EDGAR 8-K
 - [x] IB Gateway connected — headless paper trading, port 4002, autoheal watchdog
-- [x] Kafka event bus — signal replay, 7-day retention
 - [x] Pipeline self-scheduling — runs every 15 minutes autonomously
 - [x] Agent seniority system — TRAINEE → DIRECTOR progression, live trading gate
 - [x] Anthropic token/cost tracking — per-call USD cost logged to Supabase + Grafana
