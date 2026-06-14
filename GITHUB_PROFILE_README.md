@@ -2,11 +2,11 @@
 
 **Procurement Leader → AI Engineer** | Berlin 🇩🇪
 
-10+ years leading procurement and category management at **TeamViewer**, **Scout24**, **Foodpanda** and **Delivery Hero** — now engineering the AI systems that will transform the function I know inside out.
+10+ years leading procurement and category management at **TeamViewer**, **Scout24**, **Foodpanda** and **Delivery Hero** — now building AI systems for the function I know inside out.
 
-I don't just advise on AI transformation. I build the tools myself.
+I learned to build the tools myself rather than only advising on them.
 
-Every project here started with a real problem I personally encountered running procurement teams: manual triage, supplier compliance gaps, fragmented spend data, slow RFP cycles, and market intelligence that arrives too late. These are my answers — designed by someone who has lived them and built by someone who can now ship them.
+Every project here started with a real problem I hit running procurement teams: manual triage, supplier compliance gaps, fragmented spend data, slow RFP cycles, and market intelligence that arrives too late. These are my attempts to solve them — designed by someone who has lived the problems and learned to ship the code.
 
 Currently completing the **AI Integration Bootcamp @ Ironhack Berlin** (Week 6 of 9).
 
@@ -27,19 +27,19 @@ Currently completing the **AI Integration Bootcamp @ Ironhack Berlin** (Week 6 o
 
 ## Autonomous Agents & AI Systems
 
-*Production multi-agent architectures, self-healing infrastructure, and real-time AI applications running live.*
+*Multi-agent architectures, self-healing infrastructure, and real-time AI applications — deployed and self-hosted.*
 
 | Project/Description | GitHub |
 |---|---|
 | 🤖 **Icarus AI — Personal Operating System** — JARVIS-style AI OS via Telegram + PWA. 20+ capabilities: voice input (Whisper), multimodal document analysis (invoices, contracts, whiteboards), Gmail/Calendar/GitHub integration, proactive email alerts, expense tracking, LinkedIn posting, live web search, Google Maps. Multi-model routing (Haiku for simple, Sonnet for complex). Persistent memory via Upstash Redis. ~€8–9/month. | [Link](https://github.com/eugnmueller-87/Personal-Assistent) |
 | 🔧 **ICARUS Self-Healing System** — Icarus diagnoses and repairs its own runtime errors without human intervention. Catches exceptions → Claude reads broken file + traceback → generates corrected version → commits via GitHub API → Railway redeploys (~90s) → Telegram confirms fix. Escalates to manual review if the same file fails twice. | [Link](https://github.com/eugnmueller-87/Personal-Assistent) |
-| ⚡ **Pantheon OS — Autonomous Trading Orchestrator** — 8-agent trading system. **Live on Hetzner. Paper trading. Self-scheduling every 15 minutes.** ZEUS orchestrates: **Icarus** (Hermes signal watcher, 590+ suppliers) → **Hades** (OFAC/EU sanctions/ESG compliance firewall) → **Artemis** (VIX + macro regime) → **Pythia** (Kelly-inspired sizing from historical win rates) → **Zeus** (Claude Sonnet 4.6 LLM reasoning + ChromaDB KB + ticker history) → **Ares** (IBKR bracket orders: entry + 3% SL + 6% TP) → **Argus** (drawdown kill switch + portfolio monitor). **Apollo** runs daily: arXiv ingestion, earnings enrichment, self-improvement loop. Agent seniority system gates live trading — agents level up from TRAINEE → DIRECTOR as they build verified win rates. Grafana dashboard tracks equity, drawdown, agent health, and Anthropic token spend. Supabase persistence. | [Link](https://github.com/eugnmueller-87/Pantheon) |
+| ⚡ **Pantheon OS — Multi-Agent Orchestration System** — an 8-agent pipeline under a single orchestrator, deployed on Hetzner, self-scheduling every 15 minutes. **Engineering showcase, paper trading only — no real money at risk.** The point is the orchestration: one owner of control flow, agents that never call each other, typed contracts, circuit breakers, a watchdog, and kill-switches at every stage. ZEUS orchestrates: **Icarus** (Hermes signal watcher, 590+ suppliers) → **Hades** (OFAC/EU sanctions/ESG compliance firewall) → **Artemis** (VIX + macro regime) → **Pythia** (Kelly-inspired sizing from historical win rates) → **Zeus** (Claude Sonnet 4.6 LLM reasoning + ChromaDB KB + ticker history) → **Ares** (IBKR bracket orders: entry + 3% SL + 6% TP) → **Argus** (drawdown kill switch + portfolio monitor). **Apollo** runs daily: arXiv ingestion, earnings enrichment, self-improvement loop. Agent seniority system gates live trading — agents level up from TRAINEE → DIRECTOR as they build verified win rates. Grafana dashboard tracks equity, drawdown, agent health, and Anthropic token spend. Supabase persistence. | [Link](https://github.com/eugnmueller-87/Pantheon) |
 
 ---
 
-## Client Work
+## Applied / Client Projects
 
-*Production AI systems built for paying clients — real problems, live infrastructure.*
+*AI systems built against real-world client briefs — real problems, deployed infrastructure.*
 
 | Project/Description | GitHub |
 |---|---|
@@ -61,7 +61,7 @@ Currently completing the **AI Integration Bootcamp @ Ironhack Berlin** (Week 6 o
 
 ## RAG Pipelines & Knowledge Systems
 
-*Retrieval-augmented generation implementations — from basic chunking to advanced reranking and semantic search.*
+*🎓 Bootcamp coursework (Ironhack) — retrieval-augmented generation, from basic chunking to reranking and semantic search.*
 
 | Project/Description | GitHub |
 |---|---|
@@ -73,7 +73,7 @@ Currently completing the **AI Integration Bootcamp @ Ironhack Berlin** (Week 6 o
 
 ## LangChain & LangGraph Agents
 
-*Structured and unstructured agent workflows — from free tool selection to deterministic state machines.*
+*🎓 Bootcamp coursework (Ironhack) — structured and unstructured agent workflows, from free tool selection to deterministic state machines.*
 
 | Project/Description | GitHub |
 |---|---|
@@ -84,7 +84,7 @@ Currently completing the **AI Integration Bootcamp @ Ironhack Berlin** (Week 6 o
 
 ## Workflow Automation (n8n)
 
-*Production-ready n8n workflows for procurement, research, and operational automation.*
+*n8n workflows for procurement, research, and operational automation — the procurement set powers the Triage Agent above; the rest are 🎓 Ironhack coursework.*
 
 | Project/Description | GitHub |
 |---|---|
