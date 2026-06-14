@@ -402,6 +402,99 @@ def get_trades_for_report(days: int = 30) -> list[dict]:
         return []
 
 
+# ── Agent EXP (cosmetic level layer) ─────────────────────────────────────────
+
+def fetch_trade_by_order_id(order_id: str) -> Optional[dict]:
+    """SELECT a trade row back by order_id — the EXP mint needs fill_price,
+    stop_loss, confidence, position_pct, which aren't in scope at the
+    shadow_learning backfill call site. None if not found / on error."""
+    try:
+        res = (
+            get_client().table("trades")
+            .select("order_id, symbol, side, fill_price, stop_loss, confidence, position_pct, pnl_pct, hit, closed_at")
+            .eq("order_id", order_id)
+            .limit(1)
+            .execute()
+        )
+        return res.data[0] if res.data else None
+    except Exception as exc:
+        logger.debug("[SUPABASE] fetch_trade_by_order_id failed: %s", exc)
+        return None
+
+
+def insert_exp_ledger(award: dict) -> bool:
+    """Append one XP award (agent_exp_ledger). Returns True if newly inserted,
+    False on a duplicate (UNIQUE agent_name+event_type+source_ref) or error.
+    Idempotency is enforced by the DB constraint — a duplicate is a no-op."""
+    try:
+        get_client().table("agent_exp_ledger").insert(award).execute()
+        return True
+    except Exception as exc:
+        msg = str(exc).lower()
+        if "duplicate" in msg or "unique" in msg or "23505" in msg:
+            return False  # idempotency hit — already awarded
+        logger.error("[SUPABASE] insert_exp_ledger failed: %s", exc)
+        return False
+
+
+def fetch_exp_ledger(agent_name: str) -> Optional[list]:
+    """All ledger rows for one agent (for recompute). None on error."""
+    try:
+        res = (
+            get_client().table("agent_exp_ledger")
+            .select("agent_name, event_type, xp, source_ref, metadata, created_at")
+            .eq("agent_name", agent_name)
+            .order("created_at", desc=False)
+            .execute()
+        )
+        return res.data or []
+    except Exception as exc:
+        logger.error("[SUPABASE] fetch_exp_ledger failed: %s", exc)
+        return None
+
+
+def upsert_agent_exp(row: dict) -> None:
+    """Upsert the per-agent EXP rollup (agent_exp)."""
+    try:
+        row = {**row, "updated_at": datetime.now(timezone.utc).isoformat()}
+        get_client().table("agent_exp").upsert(row, on_conflict="agent_name").execute()
+    except Exception as exc:
+        logger.error("[SUPABASE] upsert_agent_exp failed: %s", exc)
+
+
+def fetch_agent_seniority_level(agent_name: str) -> Optional[int]:
+    """Current authoritative seniority level_int for one agent, or None."""
+    try:
+        res = (
+            get_client().table("agent_seniority")
+            .select("level_int")
+            .eq("agent_name", agent_name)
+            .limit(1)
+            .execute()
+        )
+        return res.data[0]["level_int"] if res.data else None
+    except Exception as exc:
+        logger.debug("[SUPABASE] fetch_agent_seniority_level failed: %s", exc)
+        return None
+
+
+def fetch_agent_progress_pct(agent_name: str) -> Optional[float]:
+    """progress_pct toward the next rung if persisted on agent_seniority, else None."""
+    try:
+        res = (
+            get_client().table("agent_seniority")
+            .select("progress_pct")
+            .eq("agent_name", agent_name)
+            .limit(1)
+            .execute()
+        )
+        if res.data and res.data[0].get("progress_pct") is not None:
+            return float(res.data[0]["progress_pct"])
+        return None
+    except Exception:
+        return None
+
+
 # ── Agent seniority ────────────────────────────────────────────────────────────
 
 def upsert_agent_seniority(scores: dict, system_level_int: int) -> None:

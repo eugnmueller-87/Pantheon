@@ -161,6 +161,55 @@ class OutcomeResolver:
             supa.update_trade_pnl(order_id, pnl_pct, hit, closed_at)
         except Exception as exc:
             logger.warning("[OUTCOME] Supabase backfill failed: %s", exc)
+            return
+        # Mint EXP for the closed trade (cosmetic — never affects sizing).
+        # The XP formula needs fill_price/stop_loss/confidence/position_pct,
+        # which aren't in scope here, so SELECT the row back first.
+        try:
+            OutcomeResolver._mint_trade_xp(order_id, pnl_pct, hit, closed_at)
+        except Exception as exc:
+            logger.debug("[OUTCOME] EXP mint skipped: %s", exc)
+
+    @staticmethod
+    def _mint_trade_xp(order_id: str, pnl_pct: float, hit: bool,
+                       closed_at: datetime) -> None:
+        import core.supabase_client as supa
+        from core.exp import award_xp, r_multiple, trade_xp
+
+        row = supa.fetch_trade_by_order_id(order_id)
+        if not row:
+            return
+        confidence   = float(row.get("confidence") or 0.5)
+        position_pct = float(row.get("position_pct") or 0.02)
+        fill_price   = row.get("fill_price")
+        stop_loss    = row.get("stop_loss")
+        won = bool(hit) and pnl_pct > 0
+
+        # Current win streak from prior agent_exp state (best-effort; recompute
+        # in award_xp re-derives the authoritative streak from closed_at order).
+        streak = 0
+        try:
+            ledger = supa.fetch_exp_ledger("zeus") or []
+            for e in sorted(ledger, key=lambda x: (x.get("metadata") or {}).get("closed_at") or x.get("created_at") or ""):
+                if e.get("event_type") != "trade":
+                    continue
+                streak = streak + 1 if (e.get("metadata") or {}).get("won") else 0
+        except Exception:
+            pass
+
+        r = r_multiple(pnl_pct, fill_price, stop_loss, position_pct)
+        xp = trade_xp(won=won, r_multiple=r, confidence=confidence,
+                      position_pct=position_pct, win_streak=streak + (1 if won else 0))
+
+        # Deterministic source_ref = order_id → idempotent on replays/reconnects.
+        award_xp(
+            "zeus", "trade", xp, source_ref=order_id,
+            metadata={
+                "won": won, "pnl_pct": pnl_pct, "r": round(r, 3),
+                "symbol": row.get("symbol"),
+                "closed_at": closed_at.isoformat() if hasattr(closed_at, "isoformat") else str(closed_at),
+            },
+        )
 
     @staticmethod
     def _symbol_for_order(order_id: str, positions: list[dict]) -> Optional[str]:
