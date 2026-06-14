@@ -9,6 +9,7 @@ import { usePipelineSocket } from './hooks/usePipelineSocket'
 import { useSupabaseRealtime } from './hooks/useSupabaseRealtime'
 import { TopBar, TabBar } from './panels/TopBar'
 import { LiveView } from './views/LiveView'
+import { PantheonView } from './views/PantheonView'
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 30_000, refetchOnWindowFocus: false } },
@@ -83,7 +84,7 @@ function Dashboard() {
           style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}
         >
           {tab === 'live'      && <LiveView socket={socket} metrics={metrics} />}
-          {tab === 'pantheon'  && <ComingSoon label="🏛️ PANTHEON (EXP & levels)" />}
+          {tab === 'pantheon'  && <PantheonView />}
           {tab === 'portfolio' && <ComingSoon label="📈 PORTFOLIO depth" />}
           {tab === 'cost'      && <ComingSoon label="⚙️ COST & HEALTH" />}
         </motion.div>

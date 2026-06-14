@@ -1054,6 +1054,7 @@ Respond in this exact JSON format — no markdown, no fences, raw JSON only:
 
     def _run_seniority_evaluation(self) -> None:
         try:
+            prev = getattr(self, "_last_exp_levels", {})
             self._seniority_report = self.seniority.evaluate()
             logger.info("[ZEUS] Seniority: %s", self._seniority_report.summary_line())
             if os.getenv("SUPABASE_URL") and os.getenv("SUPABASE_SERVICE_ROLE_KEY"):
@@ -1062,8 +1063,40 @@ Respond in this exact JSON format — no markdown, no fences, raw JSON only:
                     scores={k: v.to_dict() for k, v in self._seniority_report.agents.items()},
                     system_level_int=int(self._seniority_report.system_level),
                 )
+                self._award_promotion_xp(prev)
+            # Track levels so a later eval can detect promotions
+            self._last_exp_levels = {
+                name: int(score.level) for name, score in self._seniority_report.agents.items()
+            }
         except Exception as exc:
             logger.warning("[ZEUS] Seniority evaluation failed: %s", exc)
+
+    def _award_promotion_xp(self, prev_levels: dict) -> None:
+        """Mint the +1000 RANK UP jackpot for any agent whose level increased.
+        Deterministic source_ref = promo:{agent}:{new_level} → idempotent, so a
+        demote→re-promote to the same level never re-fires the jackpot. Cosmetic
+        only — never touches sizing or the live-trading gate."""
+        try:
+            from core.exp import MILESTONE_XP, award_xp, recompute_agent_exp
+        except Exception:
+            return
+        for name, score in self._seniority_report.agents.items():
+            new_int = int(score.level)
+            old_int = prev_levels.get(name)
+            # Recompute EXP each eval so the band-cap tracks the current rank,
+            # even when there's no promotion this cycle.
+            try:
+                recompute_agent_exp(name)
+            except Exception:
+                pass
+            if old_int is not None and new_int > old_int:
+                award_xp(
+                    name, "promotion", MILESTONE_XP["promotion"],
+                    source_ref=f"promo:{name}:{new_int}",
+                    metadata={"from_level": old_int, "to_level": new_int},
+                )
+                logger.info("[ZEUS] RANK UP — %s promoted to level %d (+%d XP)",
+                            name, new_int, MILESTONE_XP["promotion"])
 
     def _emergency_halt(self, reason: str) -> None:
         self.halt(reason=f"drawdown kill — {reason}")
