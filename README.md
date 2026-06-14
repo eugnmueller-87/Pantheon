@@ -31,7 +31,7 @@
 - **Safety is a first-class feature, not an afterthought.** Every stage can halt the pipeline: compliance kills, macro suppression, a drawdown circuit breaker, per-ticker concentration caps, and a manual `/halt`. These exist to show defensive system design — see [Pipeline Kill Switches](#pipeline-kill-switches).
 - **What it's meant to show:** orchestration of independent agents, strict typed contracts between components, fault isolation, observability (Grafana + health checks), and a real CI/CD-to-VPS deployment — transferable to any agentic system, trading or not.
 
-If you're evaluating this as engineering, the files worth reading are [`agents/zeus.py`](agents/zeus.py) (the orchestrator), [`core/types.py`](core/types.py) (the data contract), and [`core/circuit_breaker.py`](core/circuit_breaker.py) + [`core/watchdog.py`](core/watchdog.py) (the resilience layer).
+If you're evaluating this as engineering, the files worth reading are [`agents/zeus.py`](agents/zeus.py) (the orchestrator), [`core/types.py`](core/types.py) (the data contract), and [`core/circuit_breaker.py`](core/circuit_breaker.py) + [`core/watchdog.py`](core/watchdog.py) (the resilience layer). For the decisions behind the architecture — including what got built and then torn back out (Kafka, the external Hermes service) and why — see [`docs/LESSONS.md`](docs/LESSONS.md).
 
 ---
 
