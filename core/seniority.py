@@ -51,6 +51,11 @@ from pathlib import Path
 
 logger = logging.getLogger("seniority")
 
+# Minimum closed trades (realized outcomes) before ANY agent may rank above
+# SENIOR. Promotions must be earned on real evidence, not signal counts or
+# stubbed metrics. Below this, evaluate() clamps every agent to SENIOR.
+MIN_CLOSED_TRADES_FOR_PROMOTION = 20
+
 
 # ---------------------------------------------------------------------------
 # Level definition
@@ -198,6 +203,23 @@ class SeniorityEvaluator:
             "argus":   self._evaluate_argus(),
         }
 
+        # ── Hard gate: no rank above SENIOR without real closed-trade evidence ──
+        # Several per-agent ladders historically promoted on signal counts or
+        # stubbed always-pass metrics (e.g. Hades reaching Managing Director with
+        # zero closed trades), which also wrongly flipped live_trading_allowed.
+        # Promotions must be EARNED on realized outcomes. Until the system has
+        # accumulated enough closed trades, every agent is clamped to SENIOR.
+        closed = self._closed_trade_count()
+        if closed < MIN_CLOSED_TRADES_FOR_PROMOTION:
+            for name, s in scores.items():
+                if s.level > Level.SENIOR:
+                    s.level = Level.SENIOR
+                    s.failed(
+                        "closed_trade_evidence",
+                        f"only {closed}/{MIN_CLOSED_TRADES_FOR_PROMOTION} closed trades "
+                        f"— promotions gated until real outcomes exist",
+                    )
+
         system_level = min(s.level for s in scores.values())
         all_cleared  = all(s.cleared for s in scores.values())
         report = SeniorityReport(
@@ -209,6 +231,15 @@ class SeniorityEvaluator:
         self._check_promotions(scores)
         logger.info("[SENIORITY] %s", report.summary_line())
         return report
+
+    def _closed_trade_count(self) -> int:
+        """Number of trades with a realized outcome (hit IS NOT NULL).
+        The single source of 'real evidence' that gates all promotions."""
+        rows = self._sqlite_query("SELECT COUNT(*) FROM trades WHERE hit IS NOT NULL")
+        try:
+            return int(rows[0][0]) if rows and rows[0] else 0
+        except (TypeError, ValueError, IndexError):
+            return 0
 
     # ------------------------------------------------------------------
     # Agent evaluators

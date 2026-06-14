@@ -293,3 +293,52 @@ def test_report_all_cleared_false_when_no_data(tmp_db, tmp_skills):
     ev     = make_evaluator(tmp_db, tmp_skills, kb=mock_kb(0, 0))
     report = ev.evaluate()
     assert report.all_cleared is False
+
+
+# ---------------------------------------------------------------------------
+# Closed-trade gate — no rank above SENIOR without real realized outcomes
+# ---------------------------------------------------------------------------
+
+def _insert_trades(db, *, closed: int, open_: int = 0):
+    """Insert `closed` trades with a realized hit + `open_` trades with hit NULL."""
+    with sqlite3.connect(db) as conn:
+        for i in range(closed):
+            conn.execute(
+                "INSERT INTO trades (symbol, side, hit, pnl_pct) VALUES (?,?,?,?)",
+                (f"S{i}", "BUY", 1 if i % 2 == 0 else 0, 0.02 if i % 2 == 0 else -0.01),
+            )
+        for i in range(open_):
+            conn.execute(
+                "INSERT INTO trades (symbol, side, hit, pnl_pct) VALUES (?,?,?,?)",
+                (f"O{i}", "BUY", None, None),
+            )
+        conn.commit()
+
+
+def test_closed_trade_count_counts_only_realized(tmp_db, tmp_skills):
+    _insert_trades(tmp_db, closed=7, open_=44)
+    ev = make_evaluator(tmp_db, tmp_skills, kb=mock_kb(0, 0))
+    assert ev._closed_trade_count() == 7  # 51 total rows, only 7 closed
+
+
+def test_no_agent_above_senior_with_zero_closed_trades(tmp_db, tmp_skills):
+    # Even with a KB rich enough to clear/promote, zero closed trades must
+    # clamp EVERY agent to SENIOR (the Hades=Managing-Director bug).
+    _insert_trades(tmp_db, closed=0, open_=51)
+    ev = make_evaluator(tmp_db, tmp_skills, kb=mock_kb(500, 500, ["arxiv", "earnings", "fred", "edgar"]))
+    report = ev.evaluate()
+    assert all(s.level == Level.SENIOR for s in report.agents.values())
+    assert report.system_level == Level.SENIOR
+    # and therefore nobody is cleared for live money
+    assert report.system_level.live_trading_allowed() is False
+
+
+def test_gate_blocks_just_below_threshold(tmp_db, tmp_skills):
+    from core.seniority import MIN_CLOSED_TRADES_FOR_PROMOTION
+    _insert_trades(tmp_db, closed=MIN_CLOSED_TRADES_FOR_PROMOTION - 1)
+    ev = make_evaluator(tmp_db, tmp_skills, kb=mock_kb(500, 500, ["arxiv", "earnings", "fred", "edgar"]))
+    report = ev.evaluate()
+    assert all(s.level == Level.SENIOR for s in report.agents.values())
+    # the gate's failed-criterion is recorded for visibility
+    flagged = [s for s in report.agents.values() if "closed_trade_evidence" in s.criteria]
+    assert flagged, "expected the closed_trade_evidence gate to be recorded"
