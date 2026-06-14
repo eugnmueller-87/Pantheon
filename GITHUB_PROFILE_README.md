@@ -8,7 +8,7 @@ I learned to build the tools myself rather than only advising on them.
 
 Every project here started with a real problem I hit running procurement teams: manual triage, supplier compliance gaps, fragmented spend data, slow RFP cycles, and market intelligence that arrives too late. These are my attempts to solve them — designed by someone who has lived the problems and learned to ship the code.
 
-Currently completing the **AI Integration Bootcamp @ Ironhack Berlin** (Week 6 of 9).
+Completed the **AI Integration Bootcamp @ Ironhack Berlin**.
 
 ---
 
