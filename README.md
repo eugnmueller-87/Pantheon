@@ -27,7 +27,7 @@
 
 **This is a portfolio engineering project, not an investment vehicle.** It exists to demonstrate how to build and operate a non-trivial multi-agent system safely — the trading domain is the test harness, not the point.
 
-- **No real money.** Runs in paper-trading mode (`paper_trading: true`, `mock_execution: true`). The live-trading path exists but is gated behind explicit opt-in *and* an agent-seniority unlock; it is off.
+- **No real money — and the gate is earned, not flipped.** Runs in paper-trading mode (`paper_trading: true`, `mock_execution: true`). Real-money trading is gated on the agents *earning their way there*: the system seniority level must reach **PRINCIPAL** before `live_trading_allowed()` returns true ([`core/seniority.py`](core/seniority.py)), and ZEUS cannot reach DIRECTOR while any sub-agent is below PRINCIPAL. Until then it is paper-only, regardless of config. Agents start at SENIOR and level up only by accumulating a verified track record.
 - **Safety is a first-class feature, not an afterthought.** Every stage can halt the pipeline: compliance kills, macro suppression, a drawdown circuit breaker, per-ticker concentration caps, and a manual `/halt`. These exist to show defensive system design — see [Pipeline Kill Switches](#pipeline-kill-switches).
 - **What it's meant to show:** orchestration of independent agents, strict typed contracts between components, fault isolation, observability (Grafana + health checks), and a real CI/CD-to-VPS deployment — transferable to any agentic system, trading or not.
 
