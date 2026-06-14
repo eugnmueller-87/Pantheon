@@ -288,6 +288,16 @@ class ArgusAgent:
                 "paper_trading":        True,
                 "refreshed_at":         self._state.refreshed_at.isoformat(),
             })
+            # Append to the equity time-series (008) — portfolio_state is a
+            # singleton (latest only), so the equity curve needs its own table.
+            supa.insert_equity_snapshot({
+                "total_equity":         self._state.total_equity,
+                "peak_equity":          self._state.peak_equity,
+                "current_drawdown_pct": self._state.current_drawdown_pct,
+                "open_positions":       len(self._state.snapshots),
+                "paper_trading":        True,
+                "recorded_at":          self._state.refreshed_at.isoformat(),
+            })
             if self._state.snapshots:
                 positions = [
                     {

@@ -122,6 +122,19 @@ def upsert_portfolio_state(state: dict) -> None:
         logger.error("[SUPABASE] upsert_portfolio_state failed: %s", exc)
 
 
+def insert_equity_snapshot(snapshot: dict) -> None:
+    """Append one equity snapshot to the time-series (equity_snapshots, 008).
+
+    Unlike portfolio_state (a singleton — latest snapshot only), this table is
+    append-only so the dashboard can plot the equity curve over time. Each Argus
+    refresh writes one row.
+    """
+    try:
+        get_client().table("equity_snapshots").insert(snapshot).execute()
+    except Exception as exc:
+        logger.error("[SUPABASE] insert_equity_snapshot failed: %s", exc)
+
+
 def upsert_portfolio_positions(positions: list[dict]) -> None:
     """Overwrite open positions. Delete all open rows then re-insert current snapshot."""
     try:

@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AnimatePresence, motion } from 'framer-motion'
 import './theme/tokens.css'
 import { usePipelineSocket } from './hooks/usePipelineSocket'
+import { useSupabaseRealtime } from './hooks/useSupabaseRealtime'
 import { TopBar, TabBar } from './panels/TopBar'
 import { LiveView } from './views/LiveView'
 
@@ -31,8 +32,19 @@ function ComingSoon({ label }) {
 }
 
 export default function App() {
+  return (
+    <QueryClientProvider client={queryClient}>
+      <Dashboard />
+    </QueryClientProvider>
+  )
+}
+
+function Dashboard() {
   const [tab, setTab] = useState('live')
   const socket = usePipelineSocket()
+  // Wake the Supabase realtime subscriptions (feeds the query cache used by
+  // history/EXP panels). Must run inside QueryClientProvider.
+  useSupabaseRealtime()
   const { status, connected, send, signalEvents, tradeEvents, killEvents } = socket
 
   const metrics = useMemo(() => {
@@ -54,37 +66,35 @@ export default function App() {
   }, [status, signalEvents, tradeEvents, killEvents])
 
   return (
-    <QueryClientProvider client={queryClient}>
+    <div style={{
+      display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden',
+      background: 'var(--bg)', fontFamily: 'var(--font-mono)', color: 'var(--text)',
+    }}>
+      <TopBar status={status} connected={connected} metrics={metrics} send={send} />
+      <TabBar tabs={TABS} activeTab={tab} onTab={setTab} />
+
+      <AnimatePresence mode="wait">
+        <motion.div
+          key={tab}
+          initial={{ opacity: 0, y: 6 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -6 }}
+          transition={{ duration: 0.18 }}
+          style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}
+        >
+          {tab === 'live'      && <LiveView socket={socket} metrics={metrics} />}
+          {tab === 'pantheon'  && <ComingSoon label="🏛️ PANTHEON (EXP & levels)" />}
+          {tab === 'portfolio' && <ComingSoon label="📈 PORTFOLIO depth" />}
+          {tab === 'cost'      && <ComingSoon label="⚙️ COST & HEALTH" />}
+        </motion.div>
+      </AnimatePresence>
+
       <div style={{
-        display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden',
-        background: 'var(--bg)', fontFamily: 'var(--font-mono)', color: 'var(--text)',
+        textAlign: 'center', fontSize: 7, color: 'var(--border)', padding: '3px 0',
+        borderTop: '1px solid var(--panel)', letterSpacing: 2, flexShrink: 0,
       }}>
-        <TopBar status={status} connected={connected} metrics={metrics} send={send} />
-        <TabBar tabs={TABS} activeTab={tab} onTab={setTab} />
-
-        <AnimatePresence mode="wait">
-          <motion.div
-            key={tab}
-            initial={{ opacity: 0, y: 6 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -6 }}
-            transition={{ duration: 0.18 }}
-            style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}
-          >
-            {tab === 'live'      && <LiveView socket={socket} metrics={metrics} />}
-            {tab === 'pantheon'  && <ComingSoon label="🏛️ PANTHEON (EXP & levels)" />}
-            {tab === 'portfolio' && <ComingSoon label="📈 PORTFOLIO depth" />}
-            {tab === 'cost'      && <ComingSoon label="⚙️ COST & HEALTH" />}
-          </motion.div>
-        </AnimatePresence>
-
-        <div style={{
-          textAlign: 'center', fontSize: 7, color: 'var(--border)', padding: '3px 0',
-          borderTop: '1px solid var(--panel)', letterSpacing: 2, flexShrink: 0,
-        }}>
-          PANTHEON OS · ZEUS · ICARUS · ARES · ARGUS · ARTEMIS · PYTHIA · HADES · APOLLO  ·  Claude Haiku · ChromaDB · IBKR
-        </div>
+        PANTHEON OS · ZEUS · ICARUS · ARES · ARGUS · ARTEMIS · PYTHIA · HADES · APOLLO  ·  Claude Haiku · ChromaDB · IBKR
       </div>
-    </QueryClientProvider>
+    </div>
   )
 }
