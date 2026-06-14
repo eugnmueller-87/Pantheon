@@ -155,7 +155,10 @@ class TestConnectivityFailureEnqueues:
 
         assert result.status == "queued"
         assert result.symbol == "NVDA"
-        assert result.side == "SELL"
+        # Long-only: new signals always BUY, even a disruption — we never short
+        # stocks we don't hold (see agents/ares.py long-only logic). Direction is
+        # only SELL when Zeus explicitly sets sized.side to close an existing long.
+        assert result.side == "BUY"
 
     def test_enqueue_not_called_on_success(self):
         ares = _ares()
