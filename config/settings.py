@@ -18,6 +18,7 @@ _DEFAULTS: dict[str, Any] = {
     "max_drawdown_pct": 0.08,
     "max_open_positions": 3,        # €4k account — max 3 concurrent positions
     "max_open_positions_per_ticker": 1,   # never hold more than 1 open position per ticker
+    "max_deployed_pct": 0.90,       # never deploy >90% of equity — keep a cash buffer, grow not over-commit
     "ticker_cooldown_hours": 48,          # hours to wait before re-trading the same ticker
     "poll_interval_seconds": 900,
     "webhook_port": 8080,

@@ -61,6 +61,7 @@ class ZeusConfig:
     max_portfolio_drawdown_pct:   float = 0.08
     max_open_positions:           int   = 3    # settings is authoritative — see build_zeus()
     max_open_positions_per_ticker: int  = 1    # never hold > 1 position per ticker
+    max_deployed_pct:             float = 0.90 # cap: never deploy >90% of equity (keep cash buffer)
     ticker_cooldown_hours:        float = 48.0 # hours before re-trading same ticker
     paper_trading:                bool  = True
     mock_execution:               bool  = True
@@ -119,6 +120,8 @@ class ZeusOrchestrator:
             self.config.max_open_positions = int(_s["max_open_positions"])
         if self.config.max_open_positions_per_ticker == 1:
             self.config.max_open_positions_per_ticker = int(_s.get("max_open_positions_per_ticker", 1))
+        if self.config.max_deployed_pct == 0.90:
+            self.config.max_deployed_pct = float(_s.get("max_deployed_pct", 0.90))
         if self.config.ticker_cooldown_hours == 48.0:
             self.config.ticker_cooldown_hours = float(_s.get("ticker_cooldown_hours", 48.0))
         if self.config.use_debate is True and "use_debate" in _s:
@@ -498,6 +501,26 @@ class ZeusOrchestrator:
         if self.argus.open_position_count() >= self.config.max_open_positions:
             trace.killed_at_stage = "zeus"
             trace.kill_reason     = "max open positions reached"
+            self._write_trace(trace)
+            return run.kill("zeus", trace.kill_reason, trace)
+
+        # Stage 5a — Budget gate: ZEUS must not approve trades it can't fund.
+        # The goal is to GROW the account, not over-commit it. Check the real
+        # wallet (DB-based committed capital vs equity) before approving — this
+        # also fails SAFE when IB is down (committed_capital reads the DB, not a
+        # live position count that silently returns 0 when the broker is gone).
+        equity        = self.config.default_account_equity
+        committed     = self.argus.committed_capital()
+        trade_cost    = equity * sized.position_size_pct
+        max_deployed  = equity * self.config.max_deployed_pct
+        if committed + trade_cost > max_deployed:
+            trace.killed_at_stage = "zeus"
+            trace.kill_reason = (
+                f"budget: would deploy €{committed + trade_cost:,.0f} of €{equity:,.0f} "
+                f"(cap €{max_deployed:,.0f} @ {self.config.max_deployed_pct:.0%}); "
+                f"€{self.argus.available_cash():,.0f} cash free"
+            )
+            logger.info("[ZEUS] Trade rejected on budget — %s", trace.kill_reason)
             self._write_trace(trace)
             return run.kill("zeus", trace.kill_reason, trace)
 

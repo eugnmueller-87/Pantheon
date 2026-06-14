@@ -197,6 +197,27 @@ class ArgusAgent:
         else:
             logger.info("[ARGUS] Alert (no Telegram): %s", message)
 
+    def committed_capital(self) -> float:
+        """Cost basis of currently OPEN positions, read from the persisted DB
+        (portfolio_positions) — broker-independent, so it stays correct even when
+        IB Gateway is down. This is the money already deployed in the market."""
+        try:
+            import core.supabase_client as supa
+            rows = supa.get_client().table("portfolio_positions") \
+                .select("qty,avg_cost") \
+                .is_("closed_at", "null") \
+                .execute()
+            return sum(float(r["qty"]) * float(r["avg_cost"]) for r in (rows.data or []))
+        except Exception as exc:
+            logger.warning("[ARGUS] committed_capital query failed: %s", exc)
+            # Fall back to in-memory live snapshots if the DB is unreachable.
+            return sum(s.qty * s.avg_cost for s in self._state.snapshots)
+
+    def available_cash(self) -> float:
+        """Equity not yet deployed = starting equity − committed capital.
+        The wallet ZEUS must check before approving a new trade."""
+        return max(0.0, self._default_equity - self.committed_capital())
+
     def _supabase_equity_fallback(self) -> float:
         """
         When IB is unreachable, compute equity from Supabase:
