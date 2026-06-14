@@ -26,8 +26,8 @@
           "thresholds": {
             "steps": [
               { "color": "red",    "value": null },
-              { "color": "yellow", "value": 95000 },
-              { "color": "green",  "value": 100000 }
+              { "color": "yellow", "value": 3800 },
+              { "color": "green",  "value": 4000 }
             ]
           }
         }
@@ -49,7 +49,7 @@
       "gridPos": { "x": 4, "y": 0, "w": 4, "h": 4 },
       "datasource": { "uid": "supabase-postgres" },
       "targets": [{
-        "rawSql": "SELECT total_equity - 100000 AS \"P&L vs Start\" FROM portfolio_state ORDER BY refreshed_at DESC LIMIT 1",
+        "rawSql": "SELECT total_equity - 4000 AS \"P&L vs Start\" FROM portfolio_state ORDER BY refreshed_at DESC LIMIT 1",
         "format": "table"
       }],
       "fieldConfig": {
