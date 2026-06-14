@@ -1,0 +1,59 @@
+/* ZEUS dashboard design tokens — extracted from the original inline palette so
+   the look is centralized and themeable. "AAA dark trading terminal meets RPG". */
+:root {
+  /* Surfaces */
+  --bg: #060a12;
+  --panel: #0b0f1a;
+  --panel-2: #0f1420;
+  --border: #1a2540;
+  --border-soft: #0f1420;
+
+  /* Text */
+  --text: #e2e8f0;
+  --text-dim: #8090a8;
+  --text-faint: #4a5568;
+  --text-ghost: #3a4a6a;
+  --text-mute: #2d3748;
+
+  /* Accents */
+  --blue: #63b3ed;
+  --purple: #9f7aea;
+  --green: #48bb78;
+  --green-bright: #68d391;
+  --red: #fc8181;
+  --amber: #f6ad55;
+  --yellow: #f6e05e;
+  --cyan: #76e4f7;
+
+  /* Seniority rank tiers (used by EXP bars / level badges) */
+  --rank-senior: #48bb78;
+  --rank-principal: #63b3ed;
+  --rank-md: #9f7aea;
+  --rank-director: #f6ad55;
+
+  /* Event-tinted backgrounds */
+  --bg-trade: #071510;
+  --bg-kill: #150505;
+  --bg-signal: #040d18;
+
+  /* Shape */
+  --radius: 6px;
+  --radius-sm: 4px;
+  --radius-xs: 3px;
+
+  /* Type */
+  --font-mono: 'Courier New', monospace;
+}
+
+* { box-sizing: border-box; }
+
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: var(--panel); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+@keyframes blink    { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+@keyframes pulse    { 0%, 100% { box-shadow: 0 0 4px #63b3ed33; } 50% { box-shadow: 0 0 14px #63b3ed88; } }
+@keyframes pulsered { 0%, 100% { box-shadow: 0 0 4px #fc818133; } 50% { box-shadow: 0 0 14px #fc818188; } }
+@keyframes shimmer  { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
+
+button:hover { filter: brightness(1.15); }
