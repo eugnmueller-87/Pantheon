@@ -413,7 +413,6 @@ class IcarusAgent:
         """
         Fetch new signals from Supabase (written by the Hermes Supabase worker).
         Hermes Railway API fallback is only used when HERMES_FALLBACK_ENABLED=true.
-        Publishes to Kafka regardless of which path was used.
         """
         signals = self._fetch_from_supabase()
 
@@ -593,7 +592,7 @@ class IcarusAgent:
         return self._parse_hermes_items(items, persist=True)
 
     def _fetch_briefing(self) -> list[RawSignal]:
-        """Called by Zeus when Kafka is up but empty — reads Supabase directly."""
+        """Direct Supabase read — bypasses any fetch() side effects."""
         return self._fetch_from_supabase()
 
     def _parse_hermes_items(self, items: list[dict], persist: bool = False) -> list[RawSignal]:

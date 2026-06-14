@@ -650,7 +650,7 @@ export default function App() {
         textAlign: 'center', fontSize: 7, color: '#1a2540', padding: '3px 0',
         borderTop: '1px solid #0b0f1a', letterSpacing: 2, flexShrink: 0,
       }}>
-        PANTHEON OS · ZEUS · ICARUS · ARES · ARGUS · ARTEMIS · PYTHIA · HADES · APOLLO  ·  Claude Haiku · ChromaDB · Kafka · IBKR
+        PANTHEON OS · ZEUS · ICARUS · ARES · ARGUS · ARTEMIS · PYTHIA · HADES · APOLLO  ·  Claude Haiku · ChromaDB · IBKR
       </div>
     </div>
   )
