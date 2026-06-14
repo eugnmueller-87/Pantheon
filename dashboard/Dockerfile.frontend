@@ -3,10 +3,21 @@ WORKDIR /app
 COPY dashboard/frontend/package.json ./
 RUN npm install
 COPY dashboard/frontend/ ./
-ENV REACT_APP_WS_URL=ws://localhost:8081/ws
+
+# Vite inlines only VITE_*-prefixed vars, and only at build time — they must be
+# present during `npm run build`. Pass them via --build-arg (Supabase realtime +
+# WS need them baked into the bundle). Defaults keep a local build working.
+ARG VITE_WS_URL=ws://localhost:8081/ws
+ARG VITE_SUPABASE_URL=
+ARG VITE_SUPABASE_ANON_KEY=
+ENV VITE_WS_URL=$VITE_WS_URL
+ENV VITE_SUPABASE_URL=$VITE_SUPABASE_URL
+ENV VITE_SUPABASE_ANON_KEY=$VITE_SUPABASE_ANON_KEY
 RUN npm run build
 
 FROM nginx:alpine
-COPY --from=builder /app/build /usr/share/nginx/html
+# Vite emits to /app/dist (not /app/build) — copying the wrong dir ships an
+# empty webroot.
+COPY --from=builder /app/dist /usr/share/nginx/html
 COPY dashboard/nginx.conf /etc/nginx/conf.d/default.conf
 EXPOSE 3000
