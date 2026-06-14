@@ -137,6 +137,15 @@ tier (Pythia), the LLM director (ZEUS), concentration caps, and a portfolio
 drawdown circuit breaker (Argus). A signal has to survive *all* of them. When a
 trade *doesn't* happen, that's usually the system working, not failing.
 
+**The biggest gate of all — real money is *earned*, not configured.** Setting
+`paper_trading: false` is not enough to risk a cent. Real-money execution is
+gated on `system_level >= PRINCIPAL` ([`core/seniority.py`](../core/seniority.py)) —
+the agents must first accumulate a verified track record to level up from their
+SENIOR starting point, and ZEUS cannot reach DIRECTOR while any sub-agent is
+below PRINCIPAL. The config flag and the earned-seniority unlock are an *AND*,
+not an *OR*. A system that trades real money should make "go live" the hardest
+thing to do by accident, not the easiest.
+
 **Lesson:** In a system that can move money, "it refused to act" is a success
 state, and your tooling/logs should make *why it refused* obvious. The kill
 reason being printed plainly is what turned a confusing "nothing happened" into
