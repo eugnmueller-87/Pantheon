@@ -10,6 +10,8 @@ import { useSupabaseRealtime } from './hooks/useSupabaseRealtime'
 import { TopBar, TabBar } from './panels/TopBar'
 import { LiveView } from './views/LiveView'
 import { PantheonView } from './views/PantheonView'
+import { PortfolioView } from './views/PortfolioView'
+import { CostHealthView } from './views/CostHealthView'
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 30_000, refetchOnWindowFocus: false } },
@@ -23,14 +25,6 @@ const TABS = [
   { id: 'portfolio', label: 'PORTFOLIO', icon: '📈' },
   { id: 'cost',      label: 'COST & HEALTH', icon: '⚙️' },
 ]
-
-function ComingSoon({ label }) {
-  return (
-    <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-mute)', fontSize: 13, letterSpacing: 2 }}>
-      {label} — coming in a later phase
-    </div>
-  )
-}
 
 export default function App() {
   return (
@@ -85,8 +79,8 @@ function Dashboard() {
         >
           {tab === 'live'      && <LiveView socket={socket} metrics={metrics} />}
           {tab === 'pantheon'  && <PantheonView />}
-          {tab === 'portfolio' && <ComingSoon label="📈 PORTFOLIO depth" />}
-          {tab === 'cost'      && <ComingSoon label="⚙️ COST & HEALTH" />}
+          {tab === 'portfolio' && <PortfolioView />}
+          {tab === 'cost'      && <CostHealthView />}
         </motion.div>
       </AnimatePresence>
 

@@ -22,3 +22,31 @@ export const useEquitySeries  = () => useCached(QK.equity)
 export const useAgentHealthDb = () => useCached(QK.agentHealth)
 export const useSeniority     = () => useCached(QK.seniority)
 export const useExp           = () => useCached(QK.exp)
+export const useLlmUsage      = () => useCached(QK.llm)
+
+// ── Heavy aggregates via RPC (polled, not realtime) ──────────────────────────
+const SB_URL = import.meta.env.VITE_SUPABASE_URL
+const SB_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY
+
+function useRpc(name, args = {}) {
+  return useQuery({
+    queryKey: ['rpc', name, args],
+    enabled: Boolean(SB_URL && SB_KEY),
+    refetchInterval: 60_000,
+    queryFn: async () => {
+      const { createClient } = await import('@supabase/supabase-js')
+      const sb = createClient(SB_URL, SB_KEY)
+      const { data, error } = await sb.rpc(name, args)
+      if (error) throw error
+      return data
+    },
+    initialData: null,
+    staleTime: 30_000,
+  }).data
+}
+
+export const useRMultiples       = () => useRpc('get_r_multiple_distribution') || []
+export const usePerformanceStats = () => {
+  const d = useRpc('get_performance_stats')
+  return Array.isArray(d) ? d[0] : d || null
+}
