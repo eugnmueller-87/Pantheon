@@ -3,7 +3,7 @@
 *An engineering study in coordinating 8 autonomous agents under a single orchestrator — built and exercised in the trading domain because it forces the hard problems: strict data contracts, fault isolation, graceful degradation, and non-negotiable safety limits.*
 
 ![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=flat&logo=python&logoColor=white)
-![Tests](https://img.shields.io/badge/Tests-377%20passing-brightgreen?style=flat)
+![Tests](https://img.shields.io/badge/Tests-356%20passing-brightgreen?style=flat)
 ![CI](https://img.shields.io/badge/CI%2FCD-GitHub%20Actions-2088FF?style=flat&logo=githubactions&logoColor=white)
 ![Status](https://img.shields.io/badge/Status-Paper%20Trading-orange?style=flat)
 ![Broker](https://img.shields.io/badge/Broker-Interactive%20Brokers-red?style=flat)
@@ -156,7 +156,7 @@ Icarus polls that table every pipeline cycle. When Zeus processes a signal it is
 Every push to `main`:
 
 ```
-test (377 passing) → build → push to GHCR → SSH deploy to Hetzner → Cloudflare Pages (frontend)
+test (356 passing) → build → push to GHCR → SSH deploy to Hetzner → Cloudflare Pages (frontend)
 ```
 
 The deployed compose file is `infra/hetzner/docker-compose.prod.yml`. The root `docker-compose.prod.yml` is a local-build variant (for manual VPS runs). Edit `infra/hetzner/` for all production changes.
@@ -228,7 +228,7 @@ IB_PAPER_PORT=4002
 
 ```bash
 pytest tests/ -q
-# 377 tests, all green
+# 356 tests, all green
 ```
 
 ### 4. Produce signals (run once to seed, then runs every 30 min in prod)
@@ -354,7 +354,7 @@ ZEUS/
 ├── knowledge/
 │   ├── agents/                  # Per-agent Senior IC skills files
 │   └── *.md                     # Trading fundamentals, macro playbooks
-├── tests/                       # 377 tests — full pipeline coverage
+├── tests/                       # 356 tests — full pipeline coverage
 └── .github/workflows/deploy.yml # CI/CD pipeline
 ```
 
