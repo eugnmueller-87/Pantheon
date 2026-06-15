@@ -32,7 +32,14 @@ from config.settings import _DEFAULTS as SETTINGS_DEFAULTS
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 def _make_zeus(extra_env: dict | None = None, paper: bool = True) -> ZeusOrchestrator:
-    """Build a Zeus instance in mock mode, optionally injecting env vars."""
+    """Build a Zeus instance in mock mode, optionally injecting env vars.
+
+    When paper=False, the seniority hard-gate would normally force paper mode
+    (the system starts at Trainee L1, real money disarmed). To exercise the
+    genuine live-port resolution logic we arm real money AND stub the startup
+    seniority eval to report the Senior tier, so the gate permits live mode and
+    the port can resolve to 4001 as the wiring intends.
+    """
     cfg = ZeusConfig(
         paper_trading=paper,
         mock_execution=True,
@@ -41,16 +48,34 @@ def _make_zeus(extra_env: dict | None = None, paper: bool = True) -> ZeusOrchest
         "ANTHROPIC_API_KEY": "test-key-not-real",
         **(extra_env or {}),
     }
+    if not paper:
+        env_patch["ARM_REAL_MONEY"] = "true"
     # Remove IB_PORT from env unless explicitly set in extra_env
     if "IB_PORT" not in (extra_env or {}):
         env_patch["IB_PORT"] = ""   # will be popped below
 
+    from contextlib import ExitStack
     with patch.dict(os.environ, env_patch, clear=False):
         if not (extra_env or {}).get("IB_PORT"):
             os.environ.pop("IB_PORT", None)
-        with patch("anthropic.Anthropic"), \
-             patch("core.redis_bridge.RedisBridge"), \
-             patch("core.knowledge_base.KnowledgeBase"):
+        with ExitStack() as stack:
+            stack.enter_context(patch("anthropic.Anthropic"))
+            stack.enter_context(patch("core.redis_bridge.RedisBridge"))
+            stack.enter_context(patch("core.knowledge_base.KnowledgeBase"))
+            if not paper:
+                # Force the startup hard-gate's evaluation to see a Senior system.
+                from core.seniority import SeniorityReport, Tier, AgentScore
+                agents = {a: AgentScore(agent=a, tier=Tier.SENIOR, level=10, cleared=True)
+                          for a in ("zeus", "pythia", "artemis", "apollo",
+                                    "hades", "icarus", "ares", "argus")}
+                senior_report = SeniorityReport(
+                    agents=agents, system_tier=Tier.SENIOR, system_level=10,
+                    armed=True, all_cleared=True,
+                )
+                stack.enter_context(patch(
+                    "core.seniority.SeniorityEvaluator.evaluate",
+                    return_value=senior_report,
+                ))
             return ZeusOrchestrator(config=cfg)
 
 
@@ -139,6 +164,48 @@ class TestZeusPortWiring:
         """paper_trading=True must never resolve to 4001."""
         zeus = _make_zeus(paper=True)
         assert zeus.argus._ib_port != 4001
+
+    def test_hard_gate_forces_paper_when_not_senior(self):
+        """SAFETY: requesting live (paper_trading=False) while the system is NOT
+        Senior+armed must force paper mode — no real order can ever be placed
+        before the team earns it. Build with the real (Trainee) startup eval."""
+        cfg = ZeusConfig(paper_trading=False, mock_execution=True)
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key-not-real"}, clear=False):
+            os.environ.pop("IB_PORT", None)
+            os.environ.pop("ARM_REAL_MONEY", None)
+            with patch("anthropic.Anthropic"), \
+                 patch("core.redis_bridge.RedisBridge"), \
+                 patch("core.knowledge_base.KnowledgeBase"):
+                zeus = ZeusOrchestrator(config=cfg)
+        # Gate flipped config to paper mode → paper port, not the live 4001.
+        assert zeus.config.paper_trading is True
+        assert zeus.config.mock_execution is True
+        assert zeus.argus._ib_port == 4002
+
+    def test_ib_port_env_cannot_force_live_when_gate_blocks(self):
+        """SAFETY (regression): an explicit IB_PORT=4001 must NOT route a blocked
+        system to the live broker port. The gate forces paper → the live-port
+        override is ignored. This was a real adversarial finding."""
+        cfg = ZeusConfig(paper_trading=False, mock_execution=False)  # request real
+        with patch.dict(os.environ,
+                        {"ANTHROPIC_API_KEY": "test-key-not-real",
+                         "IB_PORT": "4001"},        # attacker forces live port
+                        clear=False):
+            os.environ.pop("ARM_REAL_MONEY", None)  # not armed
+            with patch("anthropic.Anthropic"), \
+                 patch("core.redis_bridge.RedisBridge"), \
+                 patch("core.knowledge_base.KnowledgeBase"):
+                zeus = ZeusOrchestrator(config=cfg)
+        # Blocked → paper + mock forced, and the live IB_PORT override is dropped.
+        assert zeus.config.paper_trading is True
+        assert zeus.config.mock_execution is True
+        assert zeus.argus._ib_port == 4002   # NOT 4001
+
+    def test_paper_mode_drops_live_ib_port_override(self):
+        """Belt-and-suspenders: even a normally-requested paper system must never
+        resolve to the live port if IB_PORT=4001 leaks into the env."""
+        zeus = _make_zeus(extra_env={"IB_PORT": "4001"}, paper=True)
+        assert zeus.argus._ib_port == 4002   # overridden back to paper
 
 
 # ── Retry: disconnect called on failed attempt ──────────────────────────────────

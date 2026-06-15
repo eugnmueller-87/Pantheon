@@ -37,13 +37,18 @@ export const TYPE_CFG = {
 // Allocation / category palette.
 export const ALLOC_COLORS = ['#63b3ed', '#9f7aea', '#68d391', '#f6ad55', '#fc8181', '#76e4f7']
 
-// Seniority rank → display + tier color (mirrors core/seniority.py Level).
+// Seniority TIER → display + color (mirrors core/seniority.py Tier).
+// Agents earn their way up: Trainee → Junior → Intermediate → Senior.
+// Senior unlocks real money (when armed). Keyed by tier_int (0..3).
 export const RANK_META = {
-  0: { label: 'SENIOR',           color: '#48bb78' },
-  1: { label: 'PRINCIPAL',        color: '#63b3ed' },
-  2: { label: 'MANAGING DIRECTOR', color: '#9f7aea' },
-  3: { label: 'DIRECTOR',         color: '#f6ad55' },
+  0: { label: 'TRAINEE',      color: '#718096' },
+  1: { label: 'JUNIOR',       color: '#63b3ed' },
+  2: { label: 'INTERMEDIATE', color: '#9f7aea' },
+  3: { label: 'SENIOR',       color: '#48bb78' },
 }
+
+// The Senior tier (int 3) is the one that unlocks real-money trading.
+export const SENIOR_TIER_INT = 3
 
 export function fmt(evt) {
   switch (evt.type) {

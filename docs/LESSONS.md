@@ -138,13 +138,30 @@ drawdown circuit breaker (Argus). A signal has to survive *all* of them. When a
 trade *doesn't* happen, that's usually the system working, not failing.
 
 **The biggest gate of all — real money is *earned*, not configured.** Setting
-`paper_trading: false` is not enough to risk a cent. Real-money execution is
-gated on `system_level >= PRINCIPAL` ([`core/seniority.py`](../core/seniority.py)) —
-the agents must first accumulate a verified track record to level up from their
-SENIOR starting point, and ZEUS cannot reach DIRECTOR while any sub-agent is
-below PRINCIPAL. The config flag and the earned-seniority unlock are an *AND*,
-not an *OR*. A system that trades real money should make "go live" the hardest
-thing to do by accident, not the easiest.
+`paper_trading: false` is not enough to risk a cent. There are THREE conditions,
+all required (an *AND*, never an *OR*):
+
+1. **The team reached the Senior tier.** Agents start at **Trainee L1** (zero
+   experience) and climb four tiers — Trainee → Junior → Intermediate → Senior —
+   by producing *successful trades*: 10 wins = +1 level, 10 levels = +1 tier
+   (~300 wins to reach Senior). ([`core/seniority.py`](../core/seniority.py))
+2. **An operator armed it.** Reaching Senior only *unlocks* real money; it stays
+   disarmed until `ARM_REAL_MONEY=true`. A human makes the final call on real
+   capital.
+3. **The config requested it** (`paper_trading: false`).
+
+If any one is missing, ZEUS forces paper mode at startup — it physically cannot
+resolve the live broker port. (This caught a real bug earlier: agents were named
+"Senior" *at the floor*, so a 0-experience system looked maxed out and the gate
+read backwards. Now "Senior" is the top you earn, not the floor you're born at.)
+
+> **Earlier mistake worth remembering:** the first version named the *floor*
+> level "Senior" (level_int 0). A brand-new agent with zero closed trades
+> displayed as "Senior" — maximum-sounding title, no experience — and a stubbed
+> metric even auto-promoted Hades to "Managing Director" on signal count alone.
+> The fix wasn't just gating promotions; it was inverting the ladder so rank is
+> *earned upward* from Trainee, and making real-money unlock a tier you reach
+> plus a switch a human flips.
 
 **Lesson:** In a system that can move money, "it refused to act" is a success
 state, and your tooling/logs should make *why it refused* obvious. The kill

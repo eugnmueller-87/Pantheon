@@ -2,18 +2,28 @@
 EXP / level system — a COSMETIC motivation layer over the seniority gate.
 
 Golden rule: EXP never affects position sizing or live-trading authority. The
-real-money gate stays system_level.max_position_pct() in zeus.py. This module
-only computes and stores flair (XP, levels, streaks) for the dashboard.
+authoritative gate is the (tier, level) in core/seniority.py, derived from the
+real winning-trade count. This module only computes and stores flair (XP bars,
+streaks) for the dashboard.
 
-Design (see docs/DASHBOARD_PLAN.md §2/§3):
+Two independent XP tracks (the user's design):
+
+  PAPER track — the climb to Senior.
+    Four tiers (TRAINEE, JUNIOR, INTERMEDIATE, SENIOR), each 10 levels, each
+    level = 10 successful trades. The displayed paper level is band-capped into
+    the agent's authoritative seniority tier so flair never outruns the gate
+    (a Trainee can't show a Senior badge no matter how much raw XP it banked).
+    Levels run 1..40 (10 per tier).
+
+  REAL-MONEY track — begins only once the agent is Senior and real money is
+    armed. A SEPARATE ledger and a SEPARATE bar, leveling on real-money
+    performance. It does not interact with the paper climb at all.
+
   - XP is minted only on realized outcomes (closed trades) + role events.
   - Lifetime XP is monotonic (a trade award is floored at 0).
-  - exp_level maps XP via a curve, then is CAPPED into the band of the agent's
-    seniority rank so a Senior-gated agent can't show Director flair.
   - Awards are idempotent on a deterministic source_ref.
 
-The pure functions here (xp_for_level, exp_level_uncapped, cap_level_to_rank,
-trade_xp, bar_fill) are unit-tested in tests/test_exp.py with no DB.
+The pure functions here are unit-tested in tests/test_exp.py with no DB.
 """
 
 from __future__ import annotations
@@ -25,7 +35,10 @@ from typing import Optional
 logger = logging.getLogger("exp")
 
 # ── Level curve ──────────────────────────────────────────────────────────────
-MAX_LEVEL = 50
+# Four paper tiers × 10 levels = 40 levels on the paper climb.
+LEVELS_PER_TIER = 10
+PAPER_TIERS = 4
+MAX_LEVEL = LEVELS_PER_TIER * PAPER_TIERS   # 40
 
 
 def xp_for_level(level: int) -> int:
@@ -46,20 +59,21 @@ def exp_level_uncapped(total_xp: float) -> int:
     return lvl
 
 
-# Seniority rank → (min displayed level on entry, max displayed level).
-# Mirrors core/seniority.py Level: SENIOR=0, PRINCIPAL=1, MANAGING_DIR=2, DIRECTOR=3.
+# Seniority TIER → (min displayed level on entry, max displayed level).
+# Mirrors core/seniority.py Tier: TRAINEE=0, JUNIOR=1, INTERMEDIATE=2, SENIOR=3.
+# Each tier owns a contiguous block of 10 levels on the 1..40 paper ladder.
 RANK_BANDS = {
-    0: (1, 9),    # SENIOR
-    1: (10, 24),  # PRINCIPAL
-    2: (25, 39),  # MANAGING DIRECTOR
-    3: (40, 50),  # DIRECTOR
+    0: (1, 10),    # TRAINEE
+    1: (11, 20),   # JUNIOR
+    2: (21, 30),   # INTERMEDIATE
+    3: (31, 40),   # SENIOR
 }
 
 
-def cap_level_to_rank(raw_level: int, seniority_level_int: int) -> int:
-    """Clamp the raw curve level into the agent's seniority band, so EXP flair
-    never outruns the authoritative rank gate."""
-    lo, hi = RANK_BANDS.get(int(seniority_level_int), (1, MAX_LEVEL))
+def cap_level_to_rank(raw_level: int, tier_int: int) -> int:
+    """Clamp the raw curve level into the agent's seniority-tier band, so EXP
+    flair never outruns the authoritative tier gate."""
+    lo, hi = RANK_BANDS.get(int(tier_int), (1, MAX_LEVEL))
     return max(lo, min(raw_level, hi))
 
 
@@ -120,29 +134,46 @@ MILESTONE_XP = {
     "first_live_trade": 500,
     "trades_50":        400,
     "equity_peak":      300,
-    "promotion":        1000,   # the RANK UP jackpot
+    "promotion":        1000,   # the RANK UP jackpot (paper tier/level up)
+    "real_money_unlock": 2000,  # reaching Senior — the big one
 }
+
+# Event types that live on the SEPARATE real-money ledger. Real-money XP is
+# tracked under these so it never mixes with the paper climb.
+REAL_MONEY_EVENT_TYPES = {"real_trade", "real_milestone"}
 
 
 @dataclass
 class AgentExpState:
-    """Derived rollup for one agent — what gets upserted to agent_exp."""
+    """Derived rollup for one agent — what gets upserted to agent_exp.
+
+    `seniority_tier_int` is the authoritative tier (0..3) used to band-cap the
+    displayed paper level. `real_money_xp` is the independent real-money track,
+    which only starts accruing after Senior + arm."""
     agent_name: str
     total_xp: int = 0
-    seniority_level_int: int = 0
+    seniority_tier_int: int = 0           # 0..3 (TRAINEE..SENIOR) — caps paper level
     lifetime_wins: int = 0
     lifetime_losses: int = 0
     current_win_streak: int = 0
     best_win_streak: int = 0
     progress_to_next_pct: float = 0.0
+    real_money_xp: int = 0               # separate track — real capital only
+    real_money_wins: int = 0
+    real_money_losses: int = 0
     metadata: dict = field(default_factory=dict)
 
     def rollup(self) -> dict:
         raw = exp_level_uncapped(self.total_xp)
-        displayed = cap_level_to_rank(raw, self.seniority_level_int)
+        displayed = cap_level_to_rank(raw, self.seniority_tier_int)
         fill = bar_fill(self.total_xp, displayed)
         base = xp_for_level(displayed)
         nxt = xp_for_level(displayed + 1)
+
+        # Real-money bar — independent curve, no tier cap (the agent is already
+        # Senior to be here at all).
+        rm_level = exp_level_uncapped(self.real_money_xp)
+        rm_fill = bar_fill(self.real_money_xp, rm_level)
         return {
             "agent_name":           self.agent_name,
             "total_xp":             int(self.total_xp),
@@ -154,9 +185,14 @@ class AgentExpState:
             "lifetime_losses":      self.lifetime_losses,
             "current_win_streak":   self.current_win_streak,
             "best_win_streak":      self.best_win_streak,
-            "seniority_level_int":  self.seniority_level_int,
-            # bar_fill exposed for the dashboard; not a stored column but handy
+            "seniority_level_int":  self.seniority_tier_int,   # stored column name kept
+            "real_money_xp":        int(self.real_money_xp),
+            "real_money_level":     rm_level,
+            "real_money_wins":      self.real_money_wins,
+            "real_money_losses":    self.real_money_losses,
+            # bar fills exposed for the dashboard; not stored columns but handy
             "_bar_fill":            round(fill, 4),
+            "_real_money_bar_fill": round(rm_fill, 4),
         }
 
 
@@ -202,10 +238,15 @@ def recompute_agent_exp(agent_name: str) -> Optional[dict]:
     if ledger is None:
         return None
 
-    total_xp = sum(int(e.get("xp", 0)) for e in ledger)
+    # Split the ledger: paper track vs the SEPARATE real-money track.
+    paper = [e for e in ledger if e.get("event_type") not in REAL_MONEY_EVENT_TYPES]
+    real  = [e for e in ledger if e.get("event_type") in REAL_MONEY_EVENT_TYPES]
 
-    # Win/loss + streak from trade events, ordered by closed_at.
-    trade_events = [e for e in ledger if e.get("event_type") == "trade"]
+    total_xp      = sum(int(e.get("xp", 0)) for e in paper)
+    real_money_xp = sum(int(e.get("xp", 0)) for e in real)
+
+    # Paper win/loss + streak from "trade" events, ordered by closed_at.
+    trade_events = [e for e in paper if e.get("event_type") == "trade"]
     trade_events.sort(key=lambda e: (e.get("metadata") or {}).get("closed_at") or e.get("created_at") or "")
     wins = losses = streak = best = 0
     for e in trade_events:
@@ -218,17 +259,27 @@ def recompute_agent_exp(agent_name: str) -> Optional[dict]:
             losses += 1
             streak = 0
 
-    seniority_int = supa.fetch_agent_seniority_level(agent_name) or 0
+    # Real-money win/loss (no streak band — its own simple tally).
+    rm_wins = sum(1 for e in real
+                  if e.get("event_type") == "real_trade" and (e.get("metadata") or {}).get("won"))
+    rm_losses = sum(1 for e in real
+                    if e.get("event_type") == "real_trade" and not (e.get("metadata") or {}).get("won"))
+
+    # Authoritative tier (0..3) caps the displayed paper level.
+    tier_int = supa.fetch_agent_seniority_level(agent_name) or 0
 
     state = AgentExpState(
         agent_name=agent_name,
         total_xp=total_xp,
-        seniority_level_int=seniority_int,
+        seniority_tier_int=tier_int,
         lifetime_wins=wins,
         lifetime_losses=losses,
         current_win_streak=streak,
         best_win_streak=best,
         progress_to_next_pct=supa.fetch_agent_progress_pct(agent_name) or 0.0,
+        real_money_xp=real_money_xp,
+        real_money_wins=rm_wins,
+        real_money_losses=rm_losses,
     )
     row = state.rollup()
     supa.upsert_agent_exp({k: v for k, v in row.items() if not k.startswith("_")})
