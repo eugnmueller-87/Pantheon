@@ -145,20 +145,56 @@ class MilestoneManager:
 
     VAULT_PCT = 0.30   # Iron Law — never changes
 
-    def __init__(self, starting_equity: float = 100.0, alert_fn=None):
-        self._starting_equity  = starting_equity
-        self._peak_equity      = starting_equity
-        self._current_equity   = starting_equity
-        self._vault_balance    = 0.0
-        self._total_vaulted    = 0.0
-        self._alert_fn         = alert_fn   # Telegram/Argus alert function
-        self._current_stage    = _stage_for_equity(starting_equity)
-        self._crossed_stages   = set()
+    def __init__(self, account_equity: float, alert_fn=None, persist: bool = True):
+        """
+        account_equity — the CURRENT account balance (single source of truth,
+        the same value used for sizing). The stage/tier band derives from this
+        live figure, so it tracks the real balance and graduates as it grows.
 
-        logger.info(
-            "[MILESTONE] Initialised — equity=€%.2f stage=%s",
-            starting_equity, self._current_stage.value,
-        )
+        The vault-profit ORIGIN is a separate, persisted baseline (captured once
+        and reloaded on boot) so cumulative profit survives restarts — it is NOT
+        the current equity and never drives the stage gate. See milestone_state.
+
+        Fails CLOSED: a missing/invalid account_equity raises, rather than
+        silently assuming a balance (a money-sizing system must not guess).
+        """
+        if account_equity is None or account_equity <= 0:
+            raise ValueError(
+                "MilestoneManager requires a positive account_equity — refusing "
+                "to default a balance for a money-sizing system (fail closed)."
+            )
+
+        self._current_equity   = account_equity
+        self._peak_equity      = account_equity
+        self._alert_fn         = alert_fn   # Telegram/Argus alert function
+        self._persist          = persist
+        # Stage derives from CURRENT equity — never a frozen starting value.
+        self._current_stage    = _stage_for_equity(account_equity)
+
+        # Vault origin + accounting: load persisted state (capture-once), else
+        # seed the origin to the current equity and persist it now.
+        loaded = self._load_state() if persist else None
+        if loaded:
+            self._milestone_origin = float(loaded["milestone_origin"])
+            self._vault_balance    = float(loaded.get("vault_balance", 0.0))
+            self._total_vaulted    = float(loaded.get("total_vaulted", 0.0))
+            self._crossed_stages   = {
+                Stage(s) for s in (loaded.get("crossed_stages") or []) if s in Stage._value2member_map_
+            }
+            logger.info(
+                "[MILESTONE] Loaded persisted state — origin=€%.2f vault=€%.2f equity=€%.2f stage=%s",
+                self._milestone_origin, self._vault_balance, account_equity, self._current_stage.value,
+            )
+        else:
+            self._milestone_origin = account_equity   # capture once
+            self._vault_balance    = 0.0
+            self._total_vaulted    = 0.0
+            self._crossed_stages   = set()
+            self._save_state()
+            logger.info(
+                "[MILESTONE] Initialised — origin captured €%.2f equity=€%.2f stage=%s",
+                self._milestone_origin, account_equity, self._current_stage.value,
+            )
 
     # ── Public API ──────────────────────────────────────────────────────────
 
@@ -238,11 +274,15 @@ class MilestoneManager:
         self._current_stage = new_stage
         self._crossed_stages.add(new_stage)
 
-        # Calculate vault transfer
-        profit        = max(0.0, equity - self._starting_equity)
+        # Calculate vault transfer from the persisted origin baseline.
+        # TODO(cost-basis): vault profit assumes no capital flows. Once real
+        # deposits/withdrawals exist, track net_contributions so a deposit raises
+        # basis instead of being skimmed as profit (profit = current - net_contrib).
+        profit        = max(0.0, equity - self._milestone_origin)
         vault_amount  = round(profit * self.VAULT_PCT, 2)
         self._vault_balance  += vault_amount
         self._total_vaulted  += vault_amount
+        self._save_state()   # persist the new vault totals + crossed stage
 
         msg = (
             f"🏆 MILESTONE CROSSED: {old_stage.value} → {new_stage.value}\n"
@@ -262,3 +302,30 @@ class MilestoneManager:
                 logger.warning("[MILESTONE] Alert failed: %s", exc)
 
         return new_stage
+
+    # ── Persistence (vault origin + accounting survive restarts) ──────────────
+
+    def _load_state(self) -> Optional[dict]:
+        """Load the persisted singleton state. None → no stored origin yet.
+        Best-effort: any persistence error degrades to in-memory (None)."""
+        try:
+            import core.supabase_client as supa
+            return supa.fetch_milestone_state()
+        except Exception:
+            return None
+
+    def _save_state(self) -> None:
+        """Persist the capture-once origin + vault accounting. Best-effort —
+        never let a persistence failure interrupt the trading loop."""
+        if not self._persist:
+            return
+        try:
+            import core.supabase_client as supa
+            supa.upsert_milestone_state({
+                "milestone_origin": self._milestone_origin,
+                "vault_balance":    self._vault_balance,
+                "total_vaulted":    self._total_vaulted,
+                "crossed_stages":   [s.value for s in self._crossed_stages],
+            })
+        except Exception as exc:
+            logger.warning("[MILESTONE] persist failed: %s", exc)

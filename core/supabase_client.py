@@ -462,6 +462,36 @@ def upsert_agent_exp(row: dict) -> None:
         logger.error("[SUPABASE] upsert_agent_exp failed: %s", exc)
 
 
+# ── Milestone / vault state (singleton row id=1) ────────────────────────────────
+
+def fetch_milestone_state() -> Optional[dict]:
+    """Load the persisted MilestoneManager state (vault origin + accounting).
+    Returns the row dict, or None if no row exists yet / persistence unavailable.
+    None means 'no stored origin' → the manager captures one and saves it."""
+    try:
+        res = (
+            get_client().table("milestone_state")
+            .select("milestone_origin, vault_balance, total_vaulted, crossed_stages")
+            .eq("id", 1)
+            .limit(1)
+            .execute()
+        )
+        return res.data[0] if res.data else None
+    except Exception as exc:
+        logger.debug("[SUPABASE] fetch_milestone_state failed: %s", exc)
+        return None
+
+
+def upsert_milestone_state(state: dict) -> None:
+    """Persist the singleton MilestoneManager state (id=1). Best-effort —
+    a persistence failure must never crash the trading loop."""
+    try:
+        row = {"id": 1, **state, "updated_at": datetime.now(timezone.utc).isoformat()}
+        get_client().table("milestone_state").upsert(row, on_conflict="id").execute()
+    except Exception as exc:
+        logger.error("[SUPABASE] upsert_milestone_state failed: %s", exc)
+
+
 def fetch_agent_seniority_level(agent_name: str) -> Optional[int]:
     """Current authoritative seniority level_int for one agent, or None."""
     try:

@@ -44,8 +44,10 @@ def build_zeus() -> ZeusOrchestrator:
         paper_trading              = settings.get("paper_trading", True),
         mock_execution             = settings.get("mock_execution", True),
         use_llm_reasoning          = settings.get("use_llm_reasoning", True),
-        default_account_equity     = settings.get("default_account_equity", 100_000.0),
-        starting_equity            = settings.get("starting_equity", 100_000.0),
+        # Single equity source — let ZeusOrchestrator resolve + fail-closed.
+        # Pass None so the constructor reads settings and raises if absent,
+        # rather than baking a wrong default here.
+        default_account_equity     = settings.get("account_equity", settings.get("default_account_equity")),
         stop_loss_pct              = settings.get("stop_loss_pct", 0.03),
         take_profit_pct            = settings.get("take_profit_pct", 0.06),
     )

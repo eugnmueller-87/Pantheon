@@ -70,8 +70,12 @@ class ZeusConfig:
     use_debate:                   bool  = True   # bull/bear debate before Director verdict
     debate_rounds:                int   = 1      # bull→bear pairs per signal
     debate_max_tokens:            int   = 400    # output cap per debate call
-    starting_equity:              float = 100.0  # seed capital — MilestoneManager tracks from here
-    default_account_equity:       float = 100_000.0
+    # Single source of truth for "how much money we have". Feeds BOTH the
+    # milestone stage/tier gate AND € position sizing, so the two can never
+    # reason about different balances. None = fail closed (raise), never guess.
+    # (Was two fields — starting_equity + default_account_equity — that could
+    #  drift and silently misclassify the stage; consolidated to one.)
+    default_account_equity:       Optional[float] = None
     stop_loss_pct:                float = 0.03
     take_profit_pct:              float = 0.06
     ib_paper_port:                int   = 4002
@@ -130,6 +134,20 @@ class ZeusOrchestrator:
             self.config.debate_rounds = int(_s.get("debate_rounds", 1))
         if self.config.debate_max_tokens == 400:
             self.config.debate_max_tokens = int(_s.get("debate_max_tokens", 400))
+
+        # Account equity — single source of truth for stage gate AND € sizing.
+        # Prefer explicit config; else settings.json. FAIL CLOSED if neither
+        # provides it: a money-sizing system must never guess a balance.
+        if self.config.default_account_equity is None:
+            _eq = _s.get("account_equity", _s.get("default_account_equity"))
+            self.config.default_account_equity = float(_eq) if _eq is not None else None
+        if self.config.default_account_equity is None or self.config.default_account_equity <= 0:
+            raise ValueError(
+                "account equity is not configured — set 'default_account_equity' "
+                "(or 'account_equity') in settings.json or pass it to ZeusConfig. "
+                "Refusing to start with an unknown balance (fail closed)."
+            )
+
         self.status = PipelineStatus.RUNNING
 
         # Core infrastructure
@@ -137,7 +155,7 @@ class ZeusOrchestrator:
         self.cb        = CircuitBreaker(failure_threshold=3, window_seconds=300, reset_timeout=120)
         self.watchdog  = Watchdog(alert_fn=self._send_alert)
         self.milestone = MilestoneManager(
-            starting_equity=self.config.starting_equity,
+            account_equity=self.config.default_account_equity,
             alert_fn=self._send_alert,
         )
 

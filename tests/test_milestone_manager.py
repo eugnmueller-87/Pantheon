@@ -42,23 +42,23 @@ class TestStageDetection:
 
 class TestInitialState:
     def test_starts_in_seed_stage(self):
-        m = MilestoneManager(starting_equity=100.0)
+        m = MilestoneManager(persist=False, account_equity=100.0)
         assert m.stage == Stage.SEED
 
     def test_config_matches_stage(self):
-        m = MilestoneManager(starting_equity=100.0)
+        m = MilestoneManager(persist=False, account_equity=100.0)
         assert m.config == STAGES[Stage.SEED]
 
     def test_vault_starts_at_zero(self):
-        m = MilestoneManager(starting_equity=100.0)
+        m = MilestoneManager(persist=False, account_equity=100.0)
         assert m.vault_balance == 0.0
 
     def test_engine_equity_matches_starting(self):
-        m = MilestoneManager(starting_equity=100.0)
+        m = MilestoneManager(persist=False, account_equity=100.0)
         assert m.engine_equity == 100.0
 
     def test_progress_at_start(self):
-        m = MilestoneManager(starting_equity=100.0)
+        m = MilestoneManager(persist=False, account_equity=100.0)
         # €100 in SEED (floor=100, target=1000): progress = 0%
         assert m.progress_pct() == 0.0
 
@@ -67,22 +67,22 @@ class TestInitialState:
 
 class TestUpdateNoCrossing:
     def test_update_within_stage_returns_none(self):
-        m = MilestoneManager(starting_equity=100.0)
+        m = MilestoneManager(persist=False, account_equity=100.0)
         result = m.update(500.0)
         assert result is None
 
     def test_update_tracks_current_equity(self):
-        m = MilestoneManager(starting_equity=100.0)
+        m = MilestoneManager(persist=False, account_equity=100.0)
         m.update(450.0)
         assert m.engine_equity == 450.0
 
     def test_vault_unchanged_within_stage(self):
-        m = MilestoneManager(starting_equity=100.0)
+        m = MilestoneManager(persist=False, account_equity=100.0)
         m.update(900.0)
         assert m.vault_balance == 0.0
 
     def test_progress_increases_with_equity(self):
-        m = MilestoneManager(starting_equity=100.0)
+        m = MilestoneManager(persist=False, account_equity=100.0)
         m.update(550.0)  # halfway through SEED (100→1000 = span of 900)
         # (550-100)/900 = 50%
         assert m.progress_pct() == pytest.approx(50.0, abs=0.1)
@@ -92,17 +92,17 @@ class TestUpdateNoCrossing:
 
 class TestMilestoneCrossing:
     def test_crossing_seed_to_sprint_returns_stage(self):
-        m = MilestoneManager(starting_equity=100.0)
+        m = MilestoneManager(persist=False, account_equity=100.0)
         result = m.update(1_000.0)
         assert result == Stage.SPRINT
 
     def test_crossing_updates_current_stage(self):
-        m = MilestoneManager(starting_equity=100.0)
+        m = MilestoneManager(persist=False, account_equity=100.0)
         m.update(1_000.0)
         assert m.stage == Stage.SPRINT
 
     def test_crossing_calculates_vault_amount(self):
-        m = MilestoneManager(starting_equity=100.0)
+        m = MilestoneManager(persist=False, account_equity=100.0)
         m.update(1_000.0)
         # profit = 1000 - 100 = 900, vault = 900 * 0.30 = 270
         assert m.vault_balance == pytest.approx(270.0, abs=0.01)
@@ -111,14 +111,14 @@ class TestMilestoneCrossing:
         assert MilestoneManager.VAULT_PCT == 0.30
 
     def test_second_crossing_accumulates_vault(self):
-        m = MilestoneManager(starting_equity=100.0)
+        m = MilestoneManager(persist=False, account_equity=100.0)
         m.update(1_000.0)   # SEED→SPRINT: profit=900, vault+=270
         m.update(10_000.0)  # SPRINT→SCALE: profit=9900, vault+=2970
         assert m.vault_balance == pytest.approx(270.0 + 2970.0, abs=1.0)
 
     def test_same_crossing_not_triggered_twice(self):
         alerts = []
-        m = MilestoneManager(starting_equity=100.0, alert_fn=lambda msg: alerts.append(msg))
+        m = MilestoneManager(persist=False, account_equity=100.0, alert_fn=lambda msg: alerts.append(msg))
         m.update(1_000.0)   # first crossing → alert
         m.update(900.0)     # equity drops back
         m.update(1_000.0)   # same crossing — must NOT fire again
@@ -126,7 +126,7 @@ class TestMilestoneCrossing:
 
     def test_crossing_fires_alert(self):
         alerts = []
-        m = MilestoneManager(starting_equity=100.0, alert_fn=lambda msg: alerts.append(msg))
+        m = MilestoneManager(persist=False, account_equity=100.0, alert_fn=lambda msg: alerts.append(msg))
         m.update(1_000.0)
         assert len(alerts) == 1
         assert "MILESTONE CROSSED" in alerts[0]
@@ -135,20 +135,20 @@ class TestMilestoneCrossing:
 
     def test_crossing_alert_mentions_vault_amount(self):
         alerts = []
-        m = MilestoneManager(starting_equity=100.0, alert_fn=lambda msg: alerts.append(msg))
+        m = MilestoneManager(persist=False, account_equity=100.0, alert_fn=lambda msg: alerts.append(msg))
         m.update(1_000.0)
         # Alert must tell user how much to move to vault
         assert "270" in alerts[0]
 
     def test_alert_contains_confirm_vault(self):
         alerts = []
-        m = MilestoneManager(starting_equity=100.0, alert_fn=lambda msg: alerts.append(msg))
+        m = MilestoneManager(persist=False, account_equity=100.0, alert_fn=lambda msg: alerts.append(msg))
         m.update(1_000.0)
         assert "/confirm_vault" in alerts[0]
 
     def test_no_vault_if_no_profit(self):
         """Starting at 1000, crossing to sprint with 0 profit → 0 vault."""
-        m = MilestoneManager(starting_equity=1_000.0)
+        m = MilestoneManager(persist=False, account_equity=1_000.0)
         m.update(1_001.0)  # still SPRINT — no crossing
         assert m.vault_balance == 0.0
 
@@ -206,7 +206,7 @@ class TestStageRiskParams:
 
 class TestStatusDict:
     def test_status_dict_has_required_keys(self):
-        m = MilestoneManager(starting_equity=100.0)
+        m = MilestoneManager(persist=False, account_equity=100.0)
         s = m.status_dict()
         required = {
             "stage", "label", "engine_equity", "vault_balance",
@@ -217,11 +217,11 @@ class TestStatusDict:
         assert required.issubset(s.keys())
 
     def test_status_dict_stage_is_string(self):
-        m = MilestoneManager(starting_equity=100.0)
+        m = MilestoneManager(persist=False, account_equity=100.0)
         assert isinstance(m.status_dict()["stage"], str)
 
     def test_status_dict_equity_is_float(self):
-        m = MilestoneManager(starting_equity=100.0)
+        m = MilestoneManager(persist=False, account_equity=100.0)
         assert isinstance(m.status_dict()["engine_equity"], float)
 
 
@@ -229,12 +229,100 @@ class TestStatusDict:
 
 class TestConfigProperty:
     def test_config_updates_after_crossing(self):
-        m = MilestoneManager(starting_equity=100.0)
+        m = MilestoneManager(persist=False, account_equity=100.0)
         assert m.config.max_position_pct == 0.01    # SEED
         m.update(1_000.0)
         assert m.config.max_position_pct == 0.02    # SPRINT
 
     def test_config_returns_correct_allowed_tiers_after_crossing(self):
-        m = MilestoneManager(starting_equity=100.0)
+        m = MilestoneManager(persist=False, account_equity=100.0)
         m.update(1_000.0)   # SPRINT
         assert m.config.allowed_tiers == [1, 2]
+
+
+# ── Single equity source: stage derives from CURRENT equity ─────────────────────
+
+class TestEquityDrivesStage:
+    def test_4k_account_is_sprint_not_seed(self):
+        # The original bug: a €4k account must classify as SPRINT (which allows
+        # tier 1+2), never SEED (tier-1-only). Stage follows the real balance.
+        m = MilestoneManager(persist=False, account_equity=4_000.0)
+        assert m.stage == Stage.SPRINT
+        assert 2 in m.config.allowed_tiers   # tier-2 signals are permitted
+
+    def test_stage_graduates_as_equity_grows(self):
+        # Proves the band tracks current equity, not a frozen starting value.
+        m = MilestoneManager(persist=False, account_equity=4_000.0)
+        assert m.stage == Stage.SPRINT
+        m.update(12_000.0)          # grew past €10k
+        assert m.stage == Stage.SCALE
+        m.update(150_000.0)         # grew past €100k
+        assert m.stage == Stage.SERIOUS
+
+    def test_missing_equity_raises_fail_closed(self):
+        # A money-sizing system must refuse to guess a balance.
+        with pytest.raises(ValueError):
+            MilestoneManager(persist=False, account_equity=None)
+        with pytest.raises(ValueError):
+            MilestoneManager(persist=False, account_equity=0.0)
+        with pytest.raises(ValueError):
+            MilestoneManager(persist=False, account_equity=-100.0)
+
+
+# ── Restart stability: persisted vault origin survives reconstruction ───────────
+
+class TestRestartStability:
+    def test_origin_persists_and_profit_not_rebaselined(self, monkeypatch):
+        """Construct, persist an origin, then reconstruct at a HIGHER equity.
+        The origin must be the ORIGINAL value (not re-baselined to the new
+        equity), so vault profit reflects (current - original origin)."""
+        import core.supabase_client as supa
+
+        # Fake persistence: a dict standing in for the milestone_state row.
+        store: dict = {}
+
+        def fake_fetch():
+            return dict(store) if store else None
+
+        def fake_upsert(state):
+            store.update(state)
+
+        monkeypatch.setattr(supa, "fetch_milestone_state", fake_fetch, raising=False)
+        monkeypatch.setattr(supa, "upsert_milestone_state", fake_upsert, raising=False)
+
+        # First boot: account at €4,000 → origin captured as 4000, persisted.
+        MilestoneManager(persist=True, account_equity=4_000.0)
+        assert store["milestone_origin"] == 4_000.0
+
+        # "Restart": reconstruct with a higher current balance (€8,000).
+        m2 = MilestoneManager(persist=True, account_equity=8_000.0)
+        # Origin must be unchanged — NOT re-baselined to 8000.
+        assert m2._milestone_origin == 4_000.0
+        # Stage still follows current equity.
+        assert m2.stage == Stage.SPRINT
+
+        # Cross to SCALE: vault profit must be measured from the ORIGINAL 4000,
+        # not from 8000. profit = 12000 - 4000 = 8000 → vault = 2400.
+        m2.update(12_000.0)
+        assert m2.vault_balance == pytest.approx(8_000.0 * 0.30, abs=1.0)
+
+    def test_vault_totals_survive_restart(self, monkeypatch):
+        import core.supabase_client as supa
+        store: dict = {}
+        monkeypatch.setattr(supa, "fetch_milestone_state",
+                            lambda: (dict(store) if store else None), raising=False)
+        monkeypatch.setattr(supa, "upsert_milestone_state",
+                            lambda s: store.update(s), raising=False)
+
+        m1 = MilestoneManager(persist=True, account_equity=100.0)
+        m1.update(1_000.0)                       # cross → vault 270
+        assert store["vault_balance"] == pytest.approx(270.0, abs=1.0)
+
+        # Restart at the new equity — accumulated vault must reload, not reset.
+        m2 = MilestoneManager(persist=True, account_equity=1_000.0)
+        assert m2.vault_balance == pytest.approx(270.0, abs=1.0)
+        # And the already-crossed SPRINT must not re-fire its alert.
+        alerts = []
+        m2._alert_fn = lambda msg: alerts.append(msg)
+        m2.update(1_000.0)
+        assert alerts == []

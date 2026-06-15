@@ -28,8 +28,10 @@ _DEFAULTS: dict[str, Any] = {
     "ib_host": "127.0.0.1",
     "ib_paper_port": 4002,
     "ib_live_port": 4001,
-    "default_account_equity": 4_000.0,     # realistic starting capital — paper trades real-world constraints
-    "starting_equity": 4_000.0,
+    # Single source of truth for account equity — feeds BOTH the milestone
+    # stage/tier gate and € position sizing (was split into default_account_equity
+    # + starting_equity, which could drift and misclassify the stage).
+    "default_account_equity": 4_000.0,
     # Risk parameters — Ares bracket order
     "stop_loss_pct": 0.03,        # 3% stop
     "take_profit_pct": 0.06,      # 6% target (2:1 R/R)

@@ -85,6 +85,7 @@ def _make_zeus(
         mock_execution=True,
         paper_trading=True,
         use_llm_reasoning=False,
+        default_account_equity=4_000.0,   # explicit — fail-closed gate requires it
     )
     with patch("agents.zeus.KnowledgeBase"), \
          patch("agents.zeus.CircuitBreaker"), \
@@ -217,6 +218,22 @@ class TestConcentrationCheck:
         result = zeus._check_concentration(sized)
         assert result is None
 
+    def test_missing_equity_fails_closed(self):
+        """A money-sizing system must REFUSE to start with an unknown balance.
+        With no equity in config and none in settings, construction must raise."""
+        with patch("config.settings.load_settings", return_value={}), \
+             patch("agents.zeus.KnowledgeBase"), \
+             patch("agents.zeus.CircuitBreaker"), \
+             patch("agents.zeus.Watchdog"), \
+             patch("agents.zeus.MilestoneManager"), \
+             patch("agents.zeus.RedisBridge"), \
+             patch("agents.zeus.SeniorityEvaluator"), \
+             patch("agents.zeus.Watchdog.start"):
+            config = ZeusConfig(mock_execution=True, paper_trading=True,
+                                use_llm_reasoning=False)  # no equity anywhere
+            with pytest.raises(ValueError):
+                ZeusOrchestrator(config)
+
     def test_settings_authoritative_for_max_open_positions(self):
         """ZeusConfig.max_open_positions must match what load_settings() returns."""
         with patch("config.settings.load_settings", return_value={
@@ -239,7 +256,8 @@ class TestConcentrationCheck:
         patch("agents.zeus.SeniorityEvaluator"), \
         patch("agents.zeus.Watchdog.start"), \
         patch("agents.zeus.ZeusOrchestrator._run_seniority_evaluation"):
-            config = ZeusConfig(mock_execution=True, paper_trading=True, use_llm_reasoning=False)
+            config = ZeusConfig(mock_execution=True, paper_trading=True, use_llm_reasoning=False,
+                                default_account_equity=4_000.0)
             zeus = ZeusOrchestrator(config)
 
         assert zeus.config.max_open_positions == 5

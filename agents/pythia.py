@@ -70,6 +70,10 @@ class PythiaAgent:
         stats = self._lookup_stats(key)
 
         if stats is None:
+            # TODO(cold-start): no-history setups default to 0.55 = tier 2. Correct
+            # treatment is lowest-tier / min-size until ~10 trades close and Pythia's
+            # real win-rate takes over. Do NOT raise the default — that would encode
+            # "no evidence" as high conviction.
             confidence   = 0.55
             position_pct = _DEFAULT_SIZE_PCT
         else:
