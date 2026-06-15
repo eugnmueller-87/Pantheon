@@ -413,7 +413,10 @@ def run_cycle() -> dict[str, int]:
     logger.info("[HERMES_LOCAL] Starting fetch cycle")
 
     edgar_sigs   = fetch_edgar_filings(max_per_ticker=3)
-    finnhub_sigs = fetch_finnhub_news(lookback_hours=1)
+    # Lookback must comfortably exceed the producer cycle (30 min default) or
+    # most cycles catch zero fresh news and the pipeline starves. 3h gives wide
+    # overlap; re-seen items are idempotent on signal_id, so no duplicate flood.
+    finnhub_sigs = fetch_finnhub_news(lookback_hours=int(os.getenv("FINNHUB_LOOKBACK_HOURS", "3")))
     market_sigs  = fetch_finnhub_market_news()
 
     all_signals = edgar_sigs + finnhub_sigs + market_sigs
