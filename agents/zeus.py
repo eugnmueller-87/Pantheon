@@ -150,9 +150,48 @@ class ZeusOrchestrator:
         self.hades     = HadesAgent()
         self.artemis   = ArtemisAgent()
         self.pythia    = PythiaAgent(milestone_manager=self.milestone)
+
+        # ── Seniority evaluator (built early — its verdict gates real money) ──
+        self.seniority = SeniorityEvaluator(kb=self.kb, alert_fn=self._send_alert)
+        self._seniority_report: Optional[SeniorityReport] = None
+
+        # ── HARD real-money gate ──────────────────────────────────────────────
+        # Settings can REQUEST live trading (paper_trading=False), but the team
+        # only earns it by reaching the Senior tier AND an operator arming it.
+        # If either is missing, force paper mode here — before Ares/Argus are
+        # built — so no real order can ever be placed prematurely. This is the
+        # teeth behind "no real money until they're senior."
+        _gate_forced_paper = False
+        if not self.config.paper_trading:
+            from core.seniority import real_money_live
+            startup_report = self.seniority.evaluate()
+            if not real_money_live(startup_report.system_tier):
+                logger.warning(
+                    "[ZEUS] Real money REQUESTED but BLOCKED — %s armed=%s. "
+                    "Forcing PAPER mode. (Reach Senior + set ARM_REAL_MONEY=true to enable.)",
+                    startup_report.summary_line().split(" | ")[0],
+                    os.getenv("ARM_REAL_MONEY", "false"),
+                )
+                self.config.paper_trading = True
+                self.config.mock_execution = True
+                _gate_forced_paper = True
+            else:
+                logger.warning("[ZEUS] Real money LIVE — system is Senior and armed. Real capital at risk.")
+
         # Resolve IB port once: env > settings.json > ZeusConfig default (4002/4001).
+        # SAFETY: when the gate forced paper mode, IGNORE any IB_PORT override —
+        # an explicit IB_PORT=4001 must never route a blocked system to the live
+        # broker port. The paper port is non-negotiable in that state.
         _ib_port_default = self.config.ib_paper_port if self.config.paper_trading else self.config.ib_live_port
-        _ib_port = int(os.getenv("IB_PORT", str(_ib_port_default)))
+        if _gate_forced_paper:
+            _ib_port = self.config.ib_paper_port
+        else:
+            _ib_port = int(os.getenv("IB_PORT", str(_ib_port_default)))
+            # Belt-and-suspenders: in paper mode the resolved port can never be live.
+            if self.config.paper_trading and _ib_port == self.config.ib_live_port:
+                logger.warning("[ZEUS] IB_PORT=%d is the LIVE port but system is paper — overriding to paper port %d",
+                               _ib_port, self.config.ib_paper_port)
+                _ib_port = self.config.ib_paper_port
 
         self.ares      = (
             AresMockAgent(
@@ -188,10 +227,6 @@ class ZeusOrchestrator:
             raise RuntimeError("ANTHROPIC_API_KEY is not set — LLM reasoning will fail. Check your .env.")
         self._claude = anthropic.Anthropic(api_key=api_key)
         self.bridge  = RedisBridge()   # SpendLens intelligence feed
-
-        # Seniority evaluator — evaluates all agents, gates position sizes
-        self.seniority = SeniorityEvaluator(kb=self.kb, alert_fn=self._send_alert)
-        self._seniority_report: Optional[SeniorityReport] = None
 
         self._register_watchdog()
         self.watchdog.start()
@@ -339,16 +374,23 @@ class ZeusOrchestrator:
         if self._seniority_report is None:
             self._run_seniority_evaluation()
         report = self._seniority_report
-        # Public view: levels only, no criteria details (knowledge base content stays private)
+        # Public view: ranks only, no criteria details (knowledge base content stays private)
         return {
-            "system_level":         report.system_level.label(),
-            "live_trading_allowed": report.system_level.live_trading_allowed(),
-            "max_position_pct":     report.system_level.max_position_pct(),
+            "system_level":         report.system_tier.label(),
+            "system_rank":          f"{report.system_tier.label()} L{report.system_level}",
+            "system_tier_int":      int(report.system_tier),
+            "real_money_unlocked":  report.real_money_unlocked,
+            "real_money_armed":     report.armed,
+            "live_trading_allowed": report.live_trading_allowed,
+            "max_position_pct":     report.max_position_pct,
             "evaluated_at":         report.evaluated_at.isoformat(),
             "agents": {
                 name: {
-                    "level":     score.level.label(),
-                    "level_int": int(score.level),
+                    "tier":      score.tier.label(),
+                    "level":     score.level,
+                    "rank":      score.rank_label(),
+                    "wins":      score.wins,
+                    "level_int": int(score.tier),   # back-compat: tier ordinal
                 }
                 for name, score in report.agents.items()
             },
@@ -526,12 +568,12 @@ class ZeusOrchestrator:
 
         # Stage 5b — Seniority position size ceiling
         if self._seniority_report is not None:
-            max_pct = self._seniority_report.system_level.max_position_pct()
+            max_pct = self._seniority_report.max_position_pct
             if sized.position_size_pct > max_pct:
                 logger.info(
                     "[ZEUS] Position capped by seniority: %.2f%% → %.2f%% (system=%s)",
                     sized.position_size_pct * 100, max_pct * 100,
-                    self._seniority_report.system_level.label(),
+                    self._seniority_report.summary_line().split(" | ")[0],
                 )
                 sized.position_size_pct = max_pct
 
@@ -855,8 +897,8 @@ Write 3-5 tight sentences. No preamble, no JSON — just your argument."""
         current_dd      = portfolio_state.current_drawdown_pct
         equity          = portfolio_state.total_equity
         seniority_level = (
-            self._seniority_report.system_level.label()
-            if self._seniority_report else "Senior"
+            f"{self._seniority_report.system_tier.label()} L{self._seniority_report.system_level}"
+            if self._seniority_report else "Trainee L1"
         )
 
         # Format trades already approved this cycle
@@ -1077,49 +1119,59 @@ Respond in this exact JSON format — no markdown, no fences, raw JSON only:
 
     def _run_seniority_evaluation(self) -> None:
         try:
-            prev = getattr(self, "_last_exp_levels", {})
+            prev = getattr(self, "_last_exp_ranks", {})
             self._seniority_report = self.seniority.evaluate()
             logger.info("[ZEUS] Seniority: %s", self._seniority_report.summary_line())
             if os.getenv("SUPABASE_URL") and os.getenv("SUPABASE_SERVICE_ROLE_KEY"):
                 import core.supabase_client as supa
                 supa.upsert_agent_seniority(
                     scores={k: v.to_dict() for k, v in self._seniority_report.agents.items()},
-                    system_level_int=int(self._seniority_report.system_level),
+                    system_level_int=int(self._seniority_report.system_tier),
                 )
                 self._award_promotion_xp(prev)
-            # Track levels so a later eval can detect promotions
-            self._last_exp_levels = {
-                name: int(score.level) for name, score in self._seniority_report.agents.items()
+            # Track (tier, level) so a later eval can detect tier-ups AND level-ups.
+            self._last_exp_ranks = {
+                name: (int(score.tier), score.level)
+                for name, score in self._seniority_report.agents.items()
             }
         except Exception as exc:
             logger.warning("[ZEUS] Seniority evaluation failed: %s", exc)
 
-    def _award_promotion_xp(self, prev_levels: dict) -> None:
-        """Mint the +1000 RANK UP jackpot for any agent whose level increased.
-        Deterministic source_ref = promo:{agent}:{new_level} → idempotent, so a
-        demote→re-promote to the same level never re-fires the jackpot. Cosmetic
-        only — never touches sizing or the live-trading gate."""
+    def _award_promotion_xp(self, prev_ranks: dict) -> None:
+        """Mint the +1000 RANK UP jackpot for any agent whose (tier, level) rose,
+        plus the big real_money_unlock milestone the first time an agent reaches
+        the Senior tier. Deterministic source_refs keep every award idempotent.
+        Cosmetic only — never touches sizing or the live-trading gate."""
         try:
             from core.exp import MILESTONE_XP, award_xp, recompute_agent_exp
+            from core.seniority import Tier
         except Exception:
             return
         for name, score in self._seniority_report.agents.items():
-            new_int = int(score.level)
-            old_int = prev_levels.get(name)
-            # Recompute EXP each eval so the band-cap tracks the current rank,
+            new_rank = (int(score.tier), score.level)
+            old_rank = prev_ranks.get(name)
+            # Recompute EXP each eval so the band-cap tracks the current tier,
             # even when there's no promotion this cycle.
             try:
                 recompute_agent_exp(name)
             except Exception:
                 pass
-            if old_int is not None and new_int > old_int:
+            if old_rank is not None and new_rank > old_rank:
                 award_xp(
                     name, "promotion", MILESTONE_XP["promotion"],
-                    source_ref=f"promo:{name}:{new_int}",
-                    metadata={"from_level": old_int, "to_level": new_int},
+                    source_ref=f"promo:{name}:{score.tier.label()}:{score.level}",
+                    metadata={"from": list(old_rank), "to": list(new_rank)},
                 )
-                logger.info("[ZEUS] RANK UP — %s promoted to level %d (+%d XP)",
-                            name, new_int, MILESTONE_XP["promotion"])
+                logger.info("[ZEUS] RANK UP — %s → %s L%d (+%d XP)",
+                            name, score.tier.label(), score.level, MILESTONE_XP["promotion"])
+                # Reaching Senior tier for the first time: the real-money unlock.
+                if score.tier >= Tier.SENIOR and (old_rank is None or old_rank[0] < int(Tier.SENIOR)):
+                    award_xp(
+                        name, "real_milestone", MILESTONE_XP["real_money_unlock"],
+                        source_ref=f"real_unlock:{name}",
+                        metadata={"event": "reached_senior_real_money_unlocked"},
+                    )
+                    logger.info("[ZEUS] 🔓 %s reached SENIOR — real money UNLOCKED (arm to enable)", name)
 
     def _emergency_halt(self, reason: str) -> None:
         self.halt(reason=f"drawdown kill — {reason}")

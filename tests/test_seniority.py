@@ -1,23 +1,41 @@
 """
-Tests for core/seniority.py — Agent Seniority Framework
+Tests for core/seniority.py — Agent Seniority Framework (tier × level model)
 
-Structure: Senior is the floor. No juniors, no trainees.
-Levels: SENIOR → PRINCIPAL → MANAGING_DIR → DIRECTOR (ZEUS only)
+Structure: agents EARN their way up. Floor is TRAINEE L1 (zero experience).
+Tiers: TRAINEE → JUNIOR → INTERMEDIATE → SENIOR. Each tier has 10 levels;
+10 successful (winning) trades advance one level; 10 levels advance a tier.
+Real money unlocks at the SENIOR tier AND only when an operator arms it.
 """
 
 from __future__ import annotations
 
 import sqlite3
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 
-from core.seniority import Level, SeniorityEvaluator, SeniorityReport
+from core.seniority import (
+    Tier,
+    SeniorityEvaluator,
+    WINS_PER_LEVEL,
+    WINS_PER_TIER,
+    level_from_wins,
+    tier_and_level_from_total_wins,
+    wins_to_next_level,
+    level_progress_pct,
+    real_money_armed,
+    real_money_live,
+)
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def _disarm(monkeypatch):
+    """Real money is disarmed by default in every test unless explicitly set."""
+    monkeypatch.delenv("ARM_REAL_MONEY", raising=False)
+
 
 @pytest.fixture
 def tmp_db(tmp_path):
@@ -42,11 +60,7 @@ def tmp_skills(tmp_path):
 
 
 def make_evaluator(tmp_db, tmp_skills, kb=None):
-    return SeniorityEvaluator(
-        kb=kb,
-        db_path=tmp_db,
-        skills_dir=tmp_skills / "agents",
-    )
+    return SeniorityEvaluator(kb=kb, db_path=tmp_db, skills_dir=tmp_skills / "agents")
 
 
 def mock_kb(knowledge_count=0, decision_count=0, source_types=None):
@@ -64,205 +78,215 @@ def mock_kb(knowledge_count=0, decision_count=0, source_types=None):
     return kb
 
 
-# ---------------------------------------------------------------------------
-# Level enum — Senior is the floor
-# ---------------------------------------------------------------------------
-
-def test_level_ordering():
-    assert Level.SENIOR < Level.PRINCIPAL < Level.MANAGING_DIR < Level.DIRECTOR
-
-
-def test_level_labels():
-    assert Level.SENIOR.label()       == "Senior"
-    assert Level.PRINCIPAL.label()    == "Principal"
-    assert Level.MANAGING_DIR.label() == "Managing Director"
-    assert Level.DIRECTOR.label()     == "Director"
-
-
-def test_position_size_by_level():
-    assert Level.SENIOR.max_position_pct()       == 0.03   # paper only
-    assert Level.PRINCIPAL.max_position_pct()    == 0.05   # live enabled
-    assert Level.MANAGING_DIR.max_position_pct() == 0.05
-    assert Level.DIRECTOR.max_position_pct()     == 0.05
-
-
-def test_live_trading_gates():
-    assert not Level.SENIOR.live_trading_allowed()       # paper only
-    assert Level.PRINCIPAL.live_trading_allowed()        # live enabled
-    assert Level.MANAGING_DIR.live_trading_allowed()
-    assert Level.DIRECTOR.live_trading_allowed()
-
-
-def test_paper_trading_always_allowed():
-    for level in Level:
-        assert level.paper_trading_allowed()
-
-
-# ---------------------------------------------------------------------------
-# Pythia — Senior Quantitative Analyst
-# ---------------------------------------------------------------------------
-
-def test_pythia_senior_not_cleared_with_no_trades(tmp_db, tmp_skills):
-    ev = make_evaluator(tmp_db, tmp_skills)
-    score = ev._evaluate_pythia()
-    assert score.level == Level.SENIOR
-    assert score.cleared is False
-
-
-def test_pythia_senior_cleared_with_5_context_keys(tmp_db, tmp_skills):
-    with sqlite3.connect(tmp_db) as conn:
-        for i in range(5):
-            for _ in range(12):
-                conn.execute(
-                    "INSERT INTO trades (context_key, hit, pnl_pct, position_pct) VALUES (?, ?, ?, ?)",
-                    (f"key_{i}", 1, 0.02, 0.02)
-                )
+def _insert_wins(db, n):
+    with sqlite3.connect(db) as conn:
+        for i in range(n):
+            conn.execute("INSERT INTO trades (symbol, side, hit, pnl_pct) VALUES (?,?,?,?)",
+                         (f"W{i}", "BUY", 1, 0.02))
         conn.commit()
-    ev = make_evaluator(tmp_db, tmp_skills)
-    score = ev._evaluate_pythia()
-    assert score.cleared is True
-    assert score.level >= Level.SENIOR
 
 
-def test_pythia_not_cleared_with_only_4_keys(tmp_db, tmp_skills):
-    with sqlite3.connect(tmp_db) as conn:
-        for i in range(4):
-            for _ in range(12):
-                conn.execute(
-                    "INSERT INTO trades (context_key, hit, pnl_pct, position_pct) VALUES (?, ?, ?, ?)",
-                    (f"key_{i}", 1, 0.02, 0.02)
-                )
+def _insert_losses(db, n):
+    with sqlite3.connect(db) as conn:
+        for i in range(n):
+            conn.execute("INSERT INTO trades (symbol, side, hit, pnl_pct) VALUES (?,?,?,?)",
+                         (f"L{i}", "BUY", 0, -0.01))
         conn.commit()
-    ev = make_evaluator(tmp_db, tmp_skills)
-    score = ev._evaluate_pythia()
-    assert score.cleared is False
 
 
 # ---------------------------------------------------------------------------
-# ZEUS — Director
+# Tier enum — Trainee is the floor, Senior is the top
 # ---------------------------------------------------------------------------
 
-def test_zeus_senior_not_cleared_empty_kb(tmp_db, tmp_skills):
-    kb = mock_kb(knowledge_count=0, decision_count=0)
-    ev = make_evaluator(tmp_db, tmp_skills, kb=kb)
-    score = ev._evaluate_zeus()
-    assert score.level == Level.SENIOR
-    assert score.cleared is False
+def test_tier_ordering():
+    assert Tier.TRAINEE < Tier.JUNIOR < Tier.INTERMEDIATE < Tier.SENIOR
 
 
-def test_zeus_senior_cleared_with_kb_and_decisions(tmp_db, tmp_skills):
-    kb = mock_kb(knowledge_count=120, decision_count=25)
-    ev = make_evaluator(tmp_db, tmp_skills, kb=kb)
-    score = ev._evaluate_zeus()
-    assert score.cleared is True
-    assert score.level == Level.SENIOR   # cleared but not yet PRINCIPAL
+def test_tier_labels():
+    assert Tier.TRAINEE.label()      == "Trainee"
+    assert Tier.JUNIOR.label()       == "Junior"
+    assert Tier.INTERMEDIATE.label() == "Intermediate"
+    assert Tier.SENIOR.label()       == "Senior"
 
 
-def test_zeus_not_cleared_without_enough_decisions(tmp_db, tmp_skills):
-    kb = mock_kb(knowledge_count=600, decision_count=15)
-    ev = make_evaluator(tmp_db, tmp_skills, kb=kb)
-    score = ev._evaluate_zeus()
-    assert score.cleared is False
+def test_position_caps_grow_with_tier():
+    assert Tier.TRAINEE.max_position_pct()      == 0.01
+    assert Tier.JUNIOR.max_position_pct()       == 0.02
+    assert Tier.INTERMEDIATE.max_position_pct() == 0.03
+    assert Tier.SENIOR.max_position_pct()       == 0.03
 
 
-# ---------------------------------------------------------------------------
-# Hades — Senior Compliance Officer
-# ---------------------------------------------------------------------------
-
-def test_hades_cleared_when_ofac_present(tmp_db, tmp_skills):
-    ev = make_evaluator(tmp_db, tmp_skills)
-    score = ev._evaluate_hades()
-    assert score.level == Level.SENIOR
-    assert score.cleared is True   # hades.py has OFAC logic
+def test_only_senior_unlocks_real_money():
+    assert not Tier.TRAINEE.real_money_unlocked()
+    assert not Tier.JUNIOR.real_money_unlocked()
+    assert not Tier.INTERMEDIATE.real_money_unlocked()
+    assert Tier.SENIOR.real_money_unlocked()
 
 
 # ---------------------------------------------------------------------------
-# Apollo — Senior Research Analyst
+# Progression math — 10 wins/level, 10 levels/tier
 # ---------------------------------------------------------------------------
 
-def test_apollo_not_cleared_with_no_arxiv(tmp_db, tmp_skills):
-    kb = mock_kb(knowledge_count=0)
-    ev = make_evaluator(tmp_db, tmp_skills, kb=kb)
-    score = ev._evaluate_apollo()
-    assert score.level == Level.SENIOR
-    assert score.cleared is False
+def test_zero_wins_is_trainee_l1():
+    assert tier_and_level_from_total_wins(0) == (Tier.TRAINEE, 1)
 
 
-def test_apollo_cleared_with_50_arxiv_papers(tmp_db, tmp_skills):
-    kb = mock_kb(knowledge_count=100, source_types={"arxiv"})
-    kb._knowledge_col.get.side_effect = lambda where=None, include=None: {
-        "ids": ["x"] * (55 if (where or {}).get("type") == "arxiv" else 0)
-    }
-    ev = make_evaluator(tmp_db, tmp_skills, kb=kb)
-    score = ev._evaluate_apollo()
-    assert score.cleared is True
+def test_level_advances_every_10_wins():
+    assert level_from_wins(0) == 1
+    assert level_from_wins(9) == 1
+    assert level_from_wins(10) == 2
+    assert level_from_wins(95) == 10
+    assert level_from_wins(999) == 10   # capped at 10 within a tier
 
 
-def test_apollo_self_improve_count_from_skills_file(tmp_db, tmp_skills):
-    (tmp_skills / "agents" / "zeus_skills.md").write_text(
-        "## Self-Improvement Insights — 2026-01-01\nfoo\n\n"
-        "## Self-Improvement Insights — 2026-02-01\nbar\n",
-        encoding="utf-8"
-    )
-    ev = make_evaluator(tmp_db, tmp_skills)
-    assert ev._apollo_self_improve_count() == 2
+def test_tier_advances_every_100_wins():
+    assert tier_and_level_from_total_wins(99)  == (Tier.TRAINEE, 10)
+    assert tier_and_level_from_total_wins(100) == (Tier.JUNIOR, 1)
+    assert tier_and_level_from_total_wins(200) == (Tier.INTERMEDIATE, 1)
+    assert tier_and_level_from_total_wins(300) == (Tier.SENIOR, 1)
+
+
+def test_senior_saturates_at_l10():
+    assert tier_and_level_from_total_wins(390) == (Tier.SENIOR, 10)
+    assert tier_and_level_from_total_wins(400) == (Tier.SENIOR, 10)
+    assert tier_and_level_from_total_wins(99999) == (Tier.SENIOR, 10)
+
+
+def test_constants_are_consistent():
+    assert WINS_PER_TIER == WINS_PER_LEVEL * 10
+    assert WINS_PER_LEVEL == 10
+
+
+def test_wins_to_next_level():
+    assert wins_to_next_level(0) == 10
+    assert wins_to_next_level(7) == 3
+    assert wins_to_next_level(10) == 10
+    assert wins_to_next_level(400) == 0   # maxed
+
+
+def test_level_progress_pct():
+    assert level_progress_pct(0) == 0.0
+    assert level_progress_pct(5) == 0.5
+    assert level_progress_pct(400) == 1.0
 
 
 # ---------------------------------------------------------------------------
-# System level = min of all agents
+# Real-money arming gate
 # ---------------------------------------------------------------------------
 
-def test_system_level_is_minimum(tmp_db, tmp_skills):
-    kb = mock_kb(knowledge_count=0, decision_count=0)
-    ev = make_evaluator(tmp_db, tmp_skills, kb=kb)
-    report = ev.evaluate()
-    assert report.system_level == min(s.level for s in report.agents.values())
+def test_disarmed_by_default():
+    assert real_money_armed() is False
+    assert real_money_live(Tier.SENIOR) is False
 
 
-def test_system_level_never_above_weakest_agent(tmp_db, tmp_skills):
-    kb = mock_kb(knowledge_count=2000, decision_count=1100)
-    ev = make_evaluator(tmp_db, tmp_skills, kb=kb)
-    report = ev.evaluate()
-    for agent_score in report.agents.values():
-        assert report.system_level <= agent_score.level
+def test_arm_flag_required_and_senior_required(monkeypatch):
+    monkeypatch.setenv("ARM_REAL_MONEY", "true")
+    assert real_money_armed() is True
+    assert real_money_live(Tier.SENIOR) is True
+    # Senior is necessary too — arming a Junior team does NOT enable real money.
+    assert real_money_live(Tier.JUNIOR) is False
+    assert real_money_live(Tier.INTERMEDIATE) is False
 
 
-def test_all_agents_start_at_senior_floor(tmp_db, tmp_skills):
-    kb = mock_kb(knowledge_count=0, decision_count=0)
+def test_arm_flag_accepts_truthy_strings(monkeypatch):
+    for val in ("true", "1", "yes", "TRUE", "Yes"):
+        monkeypatch.setenv("ARM_REAL_MONEY", val)
+        assert real_money_armed() is True
+    for val in ("false", "0", "no", ""):
+        monkeypatch.setenv("ARM_REAL_MONEY", val)
+        assert real_money_armed() is False
+
+
+# ---------------------------------------------------------------------------
+# Evaluator — agents start at the floor and climb on real wins
+# ---------------------------------------------------------------------------
+
+def test_all_agents_start_at_trainee_floor(tmp_db, tmp_skills):
+    # Zero wins, rich KB — must still be the floor (the original "born Senior" bug).
+    kb = mock_kb(knowledge_count=2000, decision_count=2000,
+                 source_types={"arxiv", "fred_macro", "earnings_history"})
     ev = make_evaluator(tmp_db, tmp_skills, kb=kb)
     report = ev.evaluate()
     for name, score in report.agents.items():
-        assert score.level >= Level.SENIOR, f"{name} should never go below Senior"
+        assert score.tier == Tier.TRAINEE, f"{name} should start at Trainee"
+        assert score.level == 1, f"{name} should start at L1"
+    assert report.system_tier == Tier.TRAINEE
+    assert report.system_level == 1
+
+
+def test_no_real_money_with_zero_wins(tmp_db, tmp_skills):
+    kb = mock_kb(knowledge_count=2000, decision_count=2000)
+    ev = make_evaluator(tmp_db, tmp_skills, kb=kb)
+    report = ev.evaluate()
+    assert report.real_money_unlocked is False
+    assert report.live_trading_allowed is False
+    assert report.max_position_pct == 0.01   # Trainee cap
+
+
+def test_cleared_agent_climbs_on_wins(tmp_db, tmp_skills):
+    # 150 wins → Junior L6 for cleared agents (zeus/artemis/apollo/hades/icarus/ares).
+    _insert_wins(tmp_db, 150)
+    kb = mock_kb(knowledge_count=500, decision_count=500,
+                 source_types={"arxiv", "fred_macro"})
+    ev = make_evaluator(tmp_db, tmp_skills, kb=kb)
+    report = ev.evaluate()
+    z = report.agents["zeus"]
+    assert z.cleared is True
+    assert z.tier == Tier.JUNIOR
+    assert z.level == 6   # 150 wins: tier=Junior, 50 wins in tier → L6
+    assert z.wins == 150
+
+
+def test_uncleared_agent_pinned_to_floor_despite_wins(tmp_db, tmp_skills):
+    # Many wins, but a misconfigured agent (no KB → zeus clearance fails) is
+    # held at Trainee L1 — you can't climb on a broken configuration.
+    _insert_wins(tmp_db, 350)
+    kb = mock_kb(knowledge_count=0, decision_count=0)   # zeus clearance fails
+    ev = make_evaluator(tmp_db, tmp_skills, kb=kb)
+    report = ev.evaluate()
+    z = report.agents["zeus"]
+    assert z.cleared is False
+    assert z.tier == Tier.TRAINEE
+    assert z.level == 1
+
+
+def test_losses_do_not_advance(tmp_db, tmp_skills):
+    _insert_wins(tmp_db, 20)     # 2 levels' worth
+    _insert_losses(tmp_db, 500)  # losses must not count
+    kb = mock_kb(knowledge_count=500, decision_count=500, source_types={"fred_macro"})
+    ev = make_evaluator(tmp_db, tmp_skills, kb=kb)
+    report = ev.evaluate()
+    assert report.agents["artemis"].wins == 20
+    assert report.agents["artemis"].tier == Tier.TRAINEE
+    assert report.agents["artemis"].level == 3   # 20 wins → L3
+
+
+def test_system_tier_is_floor_across_agents(tmp_db, tmp_skills):
+    # 350 wins, but Pythia/Argus fail clearance → held at Trainee → system floor.
+    _insert_wins(tmp_db, 350)
+    kb = mock_kb(knowledge_count=500, decision_count=500, source_types={"fred_macro"})
+    ev = make_evaluator(tmp_db, tmp_skills, kb=kb)
+    report = ev.evaluate()
+    assert report.system_tier == min(s.tier for s in report.agents.values())
+    assert report.system_tier == Tier.TRAINEE   # Pythia/Argus drag it down
 
 
 # ---------------------------------------------------------------------------
-# Position size ceiling
+# Counts
 # ---------------------------------------------------------------------------
 
-def test_senior_max_position_is_3pct():
-    assert Level.SENIOR.max_position_pct() == 0.03
-
-
-def test_principal_and_above_max_position_is_5pct():
-    assert Level.PRINCIPAL.max_position_pct()    == 0.05
-    assert Level.MANAGING_DIR.max_position_pct() == 0.05
-    assert Level.DIRECTOR.max_position_pct()     == 0.05
-
-
-# ---------------------------------------------------------------------------
-# Promotion detection
-# ---------------------------------------------------------------------------
-
-def test_promotion_alert_fires_on_level_increase(tmp_db, tmp_skills):
-    alerts = []
+def test_winning_trade_count_counts_only_wins(tmp_db, tmp_skills):
+    _insert_wins(tmp_db, 7)
+    _insert_losses(tmp_db, 13)
     ev = make_evaluator(tmp_db, tmp_skills, kb=mock_kb(0, 0))
-    ev._alert_fn = lambda msg: alerts.append(msg)
-    ev.evaluate()
+    assert ev._winning_trade_count() == 7
 
-    # Simulate KB growth triggering a promotion
-    ev._kb = mock_kb(knowledge_count=120, decision_count=25)
-    ev.evaluate()
-    assert isinstance(alerts, list)   # no crash; alert may or may not fire depending on chain
+
+def test_closed_trade_count_counts_wins_and_losses(tmp_db, tmp_skills):
+    _insert_wins(tmp_db, 7)
+    _insert_losses(tmp_db, 13)
+    ev = make_evaluator(tmp_db, tmp_skills, kb=mock_kb(0, 0))
+    assert ev._closed_trade_count() == 20
 
 
 # ---------------------------------------------------------------------------
@@ -271,74 +295,79 @@ def test_promotion_alert_fires_on_level_increase(tmp_db, tmp_skills):
 
 def test_report_to_dict_has_required_keys(tmp_db, tmp_skills):
     ev = make_evaluator(tmp_db, tmp_skills, kb=mock_kb(0, 0))
-    d  = ev.evaluate().to_dict()
-    assert "system_level"          in d
-    assert "max_position_pct"      in d
-    assert "live_trading_allowed"  in d
-    assert "paper_trading_allowed" in d
-    assert "all_cleared"           in d
-    assert "agents"                in d
-    assert set(d["agents"].keys()) == {"zeus", "pythia", "artemis", "apollo", "hades", "icarus", "ares", "argus"}
+    d = ev.evaluate().to_dict()
+    for k in ("system_tier", "system_tier_int", "system_level", "system_rank",
+              "max_position_pct", "paper_trading_allowed", "real_money_unlocked",
+              "real_money_armed", "live_trading_allowed", "all_cleared", "agents"):
+        assert k in d, f"missing {k}"
+    assert set(d["agents"].keys()) == {
+        "zeus", "pythia", "artemis", "apollo", "hades", "icarus", "ares", "argus"
+    }
+
+
+def test_agent_dict_has_tier_level_rank(tmp_db, tmp_skills):
+    _insert_wins(tmp_db, 150)
+    ev = make_evaluator(tmp_db, tmp_skills,
+                        kb=mock_kb(500, 500, source_types={"fred_macro"}))
+    d = ev.evaluate().to_dict()
+    art = d["agents"]["artemis"]
+    for k in ("tier", "tier_int", "level", "wins", "rank", "level_int"):
+        assert k in art
+    assert art["rank"] == f"{art['tier']} L{art['level']}"
+    assert art["level_int"] == art["tier_int"]   # back-compat alias
 
 
 def test_report_summary_line_format(tmp_db, tmp_skills):
-    ev   = make_evaluator(tmp_db, tmp_skills, kb=mock_kb(0, 0))
+    ev = make_evaluator(tmp_db, tmp_skills, kb=mock_kb(0, 0))
     line = ev.evaluate().summary_line()
     assert "System:" in line
-    assert "PAPER ONLY" in line or "LIVE ENABLED" in line
+    assert "PAPER ONLY" in line
     assert "Max position:" in line
 
 
-def test_report_all_cleared_false_when_no_data(tmp_db, tmp_skills):
-    ev     = make_evaluator(tmp_db, tmp_skills, kb=mock_kb(0, 0))
+def test_summary_shows_unlocked_disarmed(tmp_db, tmp_skills):
+    # All agents Senior + cleared but NOT armed → "REAL UNLOCKED (DISARMED)".
+    _insert_wins(tmp_db, 300)
+    kb = mock_kb(2000, 2000, source_types={"arxiv", "fred_macro", "earnings_history"})
+    ev = make_evaluator(tmp_db, tmp_skills, kb=kb)
+    # Force every agent cleared by stubbing the clearance checks.
+    for attr in ("_clear_zeus", "_clear_pythia", "_clear_artemis", "_clear_apollo",
+                 "_clear_hades", "_clear_icarus", "_clear_ares", "_clear_argus"):
+        setattr(ev, attr, lambda score: True)
     report = ev.evaluate()
-    assert report.all_cleared is False
+    assert report.system_tier == Tier.SENIOR
+    assert report.real_money_unlocked is True
+    assert report.live_trading_allowed is False   # not armed
+    assert "REAL UNLOCKED (DISARMED)" in report.summary_line()
+
+
+def test_summary_shows_live_when_armed(tmp_db, tmp_skills, monkeypatch):
+    monkeypatch.setenv("ARM_REAL_MONEY", "true")
+    _insert_wins(tmp_db, 300)
+    kb = mock_kb(2000, 2000, source_types={"arxiv", "fred_macro", "earnings_history"})
+    ev = make_evaluator(tmp_db, tmp_skills, kb=kb)
+    for attr in ("_clear_zeus", "_clear_pythia", "_clear_artemis", "_clear_apollo",
+                 "_clear_hades", "_clear_icarus", "_clear_ares", "_clear_argus"):
+        setattr(ev, attr, lambda score: True)
+    report = ev.evaluate()
+    assert report.system_tier == Tier.SENIOR
+    assert report.live_trading_allowed is True
+    assert report.max_position_pct == 0.05      # real-money cap
+    assert "LIVE (ARMED)" in report.summary_line()
 
 
 # ---------------------------------------------------------------------------
-# Closed-trade gate — no rank above SENIOR without real realized outcomes
+# Promotion detection (tier OR level increase)
 # ---------------------------------------------------------------------------
 
-def _insert_trades(db, *, closed: int, open_: int = 0):
-    """Insert `closed` trades with a realized hit + `open_` trades with hit NULL."""
-    with sqlite3.connect(db) as conn:
-        for i in range(closed):
-            conn.execute(
-                "INSERT INTO trades (symbol, side, hit, pnl_pct) VALUES (?,?,?,?)",
-                (f"S{i}", "BUY", 1 if i % 2 == 0 else 0, 0.02 if i % 2 == 0 else -0.01),
-            )
-        for i in range(open_):
-            conn.execute(
-                "INSERT INTO trades (symbol, side, hit, pnl_pct) VALUES (?,?,?,?)",
-                (f"O{i}", "BUY", None, None),
-            )
-        conn.commit()
+def test_promotion_alert_fires_on_level_increase(tmp_db, tmp_skills):
+    alerts = []
+    kb = mock_kb(500, 500, source_types={"fred_macro"})
+    ev = make_evaluator(tmp_db, tmp_skills, kb=kb)
+    ev._alert_fn = lambda msg: alerts.append(msg)
 
-
-def test_closed_trade_count_counts_only_realized(tmp_db, tmp_skills):
-    _insert_trades(tmp_db, closed=7, open_=44)
-    ev = make_evaluator(tmp_db, tmp_skills, kb=mock_kb(0, 0))
-    assert ev._closed_trade_count() == 7  # 51 total rows, only 7 closed
-
-
-def test_no_agent_above_senior_with_zero_closed_trades(tmp_db, tmp_skills):
-    # Even with a KB rich enough to clear/promote, zero closed trades must
-    # clamp EVERY agent to SENIOR (the Hades=Managing-Director bug).
-    _insert_trades(tmp_db, closed=0, open_=51)
-    ev = make_evaluator(tmp_db, tmp_skills, kb=mock_kb(500, 500, ["arxiv", "earnings", "fred", "edgar"]))
-    report = ev.evaluate()
-    assert all(s.level == Level.SENIOR for s in report.agents.values())
-    assert report.system_level == Level.SENIOR
-    # and therefore nobody is cleared for live money
-    assert report.system_level.live_trading_allowed() is False
-
-
-def test_gate_blocks_just_below_threshold(tmp_db, tmp_skills):
-    from core.seniority import MIN_CLOSED_TRADES_FOR_PROMOTION
-    _insert_trades(tmp_db, closed=MIN_CLOSED_TRADES_FOR_PROMOTION - 1)
-    ev = make_evaluator(tmp_db, tmp_skills, kb=mock_kb(500, 500, ["arxiv", "earnings", "fred", "edgar"]))
-    report = ev.evaluate()
-    assert all(s.level == Level.SENIOR for s in report.agents.values())
-    # the gate's failed-criterion is recorded for visibility
-    flagged = [s for s in report.agents.values() if "closed_trade_evidence" in s.criteria]
-    assert flagged, "expected the closed_trade_evidence gate to be recorded"
+    _insert_wins(tmp_db, 5)     # Trainee L1
+    ev.evaluate()
+    _insert_wins(tmp_db, 10)    # now 15 wins → Trainee L2 (level up)
+    ev.evaluate()
+    assert any("LEVEL UP" in m or "TIER PROMOTION" in m for m in alerts)

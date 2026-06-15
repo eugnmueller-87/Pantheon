@@ -303,8 +303,8 @@ Live at `https://moremanamoreproblems.de/grafana/` — provisioned automatically
 | Agent Health | All 8 agents with live status and last-check timestamp |
 | Recent Trades | Last 50 trades, WIN/LOSS/OPEN color-coded |
 | Monthly Returns | Win rate + avg P&L % by month |
-| Agent Seniority Levels | Per-agent level, score, live-trading clearance |
-| System Seniority | Current system-wide level (TRAINEE → DIRECTOR) |
+| Agent Seniority Levels | Per-agent tier + level (1–10), wins, live-trading clearance |
+| System Seniority | Current system-wide rank (TRAINEE → JUNIOR → INTERMEDIATE → SENIOR) |
 | Anthropic Budget Used | Gauge — cumulative spend vs $25 budget |
 | Budget Remaining | Dollar amount left before manual top-up needed |
 | Daily LLM Cost | Time-series — daily Anthropic API spend |
@@ -407,7 +407,7 @@ ZEUS pipeline run
 - [x] Historical ingestion bootstrap — 4 years earnings, Form 4, FRED macro, EDGAR 8-K
 - [x] IB Gateway connected — headless paper trading, port 4002, autoheal watchdog
 - [x] Pipeline self-scheduling — runs every 15 minutes autonomously
-- [x] Agent seniority system — TRAINEE → DIRECTOR progression, live trading gate
+- [x] Agent seniority system — TRAINEE → JUNIOR → INTERMEDIATE → SENIOR (10 levels/tier, 10 wins/level), real-money gate at Senior + manual arm
 - [x] Anthropic token/cost tracking — per-call USD cost logged to Supabase + Grafana
 - [x] Hermes replaced with local EDGAR + Finnhub fetcher (no Railway dependency)
 - [x] Hermes Producer decoupled as own container — own failure domain
@@ -418,8 +418,8 @@ ZEUS pipeline run
 
 ### In Progress
 - [ ] First paper trade — pipeline is live and processing signals; waiting for a high-conviction approval
-- [ ] Trade history accumulation — agents levelling up from TRAINEE as paper trades close
-- [ ] Win rate → seniority → live trading unlock (target: Senior across all agents)
+- [ ] Trade history accumulation — agents levelling up from Trainee L1 as winning paper trades close (10 wins/level)
+- [ ] Win rate → seniority → real-money unlock (target: Senior tier across all agents, then manual arm)
 
 ### Next
 - [ ] Activate Phase 2 (Atlas universe screener) once first trades close
