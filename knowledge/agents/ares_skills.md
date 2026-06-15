@@ -15,8 +15,8 @@ Ares does not decide which trades to take — that is ZEUS's domain. Ares ensure
 ### Interactive Brokers Connection Management
 
 IB Gateway must be running before Ares can connect. Connection parameters:
-- Paper trading port: 7497 (always use for testing)
-- Live trading port: 7496 (only at Principal+ seniority with live_trading_allowed=True)
+- Paper trading port: 4002 (always use for testing)
+- Live trading port: 4001 (only when the team reaches the SENIOR tier AND real money is armed — live_trading_allowed=True)
 - Client ID: Ares uses 1, Argus uses 2. Never reuse client IDs simultaneously — causes connection conflicts.
 
 Connection is persistent but can drop. `_get_connection()` handles reconnection. If connection drops during an active trade, IB manages the bracket orders autonomously — the trade is not lost. Ares logs the disconnect and reconnection for audit.

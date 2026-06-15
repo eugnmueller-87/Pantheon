@@ -15,7 +15,7 @@ export function ExpBar({ fillPct, level, xpInto, xpToNext, color }) {
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
         <span style={{ fontSize: 9, fontWeight: 700, color, letterSpacing: 1 }}>LVL {level}</span>
         <span style={{ fontSize: 8, color: 'var(--text-faint)', fontVariantNumeric: 'tabular-nums' }}>
-          {xpToNext > 0 ? `${xpInto} / ${xpToNext} XP` : 'MAX'}
+          {xpToNext === undefined ? '' : xpToNext > 0 ? `${xpInto} / ${xpToNext} XP` : 'MAX'}
         </span>
       </div>
       <div style={{ position: 'relative', height: 10, background: 'var(--border)', borderRadius: 5, overflow: 'hidden' }}>

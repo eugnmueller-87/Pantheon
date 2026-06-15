@@ -143,18 +143,21 @@ xp_for_level(L) = round(500 * L^1.6)    # cumulative XP to REACH level L
 exp_level(xp)   = largest L where xp_for_level(L) <= xp   (clamp 1..50)
 ```
 
-Each seniority rung pins a band so EXP can't show Director flair on a
-Senior-gated agent:
+Each seniority TIER pins a 10-level band so EXP can't show a Senior badge on a
+Trainee-gated agent (four paper tiers × 10 levels = levels 1–40):
 
 ```
-SENIOR    (0) → EXP 1–9    (cap 9 until promoted)
-PRINCIPAL (1) → EXP 10–24  (floor 10 on promotion, cap 24)
-MANAGING  (2) → EXP 25–39  (floor 25, cap 39)
-DIRECTOR  (3) → EXP 40–50  (floor 40, ZEUS only)
+TRAINEE      (0) → EXP 1–10   (cap 10 until promoted to Junior)
+JUNIOR       (1) → EXP 11–20  (floor 11 on promotion, cap 20)
+INTERMEDIATE (2) → EXP 21–30  (floor 21, cap 30)
+SENIOR       (3) → EXP 31–40  (floor 31, top of the paper climb)
 ```
+
+A SEPARATE real-money XP bar (`real_money_xp` / `real_money_level`) begins only
+once an agent reaches Senior and real money is armed — it is not tier-capped.
 
 > **[CORRECTED] Bar-fill must use the DISPLAYED (capped) level, not raw `exp_level(xp)`.**
-> A SENIOR agent with 20k XP has raw L=10 but displayed L=9 (band cap). Compute
+> A TRAINEE agent with 20k XP has raw L=11 but displayed L=10 (band cap). Compute
 > `bar_fill` and the `L{n}·{into}/{next}` label from the **capped** level so the
 > fill, label, and rendered tier never disagree. Cover this with a Vitest case.
 
@@ -294,7 +297,7 @@ level-up bursts, staggered reveals, traveling pipeline dots.
   > explicitly: render "All current-rung criteria met — awaiting promotion eval"
   > rather than an empty box, so it reads as correct, not broken.
 - **Level-up juice:** Supabase Realtime UPDATE on `agent_seniority`/`agent_exp` → on `level_int` increase, orchestrated framer-motion sequence (gold flash, glow/confetti, bar fill-to-100-then-reset, ribbon cross-fade, "PANTHEON PROMOTION" toast).
-- **SYSTEM LEVEL hero banner** (wires `App.jsx:369`): system level = MIN over agents, the `max_position_pct` cap, and a **LIVE-TRADING CLEARANCE badge** (locked "PAPER ONLY" → green "LIVE ENABLED" at Senior→Principal).
+- **SYSTEM RANK hero banner**: system rank = MIN tier+level over agents, the `max_position_pct` cap, and a **REAL-MONEY CLEARANCE badge** with three states: 🔒 "PAPER ONLY" (below Senior) → ⚠️ "REAL UNLOCKED · DISARMED" (Senior reached, not armed) → 🔓 "LIVE — REAL MONEY" (Senior + armed).
 - **Promotion timeline** from `get_promotion_history(90)` — use `agent_seniority_history` as source of truth (in-memory `_last_levels` resets on restart).
 
 ### TAB 2 — PORTFOLIO & P&L

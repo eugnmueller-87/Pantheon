@@ -36,8 +36,11 @@ function QuestLog({ criteria, notes }) {
 export function AgentCard({ agent, expRow, seniorityRow, justPromoted }) {
   const [flipped, setFlipped] = useState(false)
   const exp = deriveExp({ ...expRow, seniority_level_int: seniorityRow?.level_int ?? expRow?.seniority_level_int })
-  const rank = RANK_META[exp.seniorityInt] || RANK_META[0]
+  const rank = RANK_META[exp.tierInt] || RANK_META[0]
   const color = rank.color
+  // Within-tier level (1..10) for the ribbon, from the authoritative seniority row.
+  const tierLevel = seniorityRow?.tier_level ?? null
+  const ribbonLabel = tierLevel ? `${rank.label} L${tierLevel}` : rank.label
 
   return (
     <motion.div
@@ -56,7 +59,7 @@ export function AgentCard({ agent, expRow, seniorityRow, justPromoted }) {
         position: 'absolute', top: 0, right: 0, fontSize: 7, fontWeight: 700, letterSpacing: 1,
         color, background: `${color}1a`, border: `1px solid ${color}44`,
         borderRadius: '0 8px 0 8px', padding: '2px 7px',
-      }}>{rank.label}</div>
+      }}>{ribbonLabel}</div>
 
       {/* avatar + name */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
@@ -74,6 +77,12 @@ export function AgentCard({ agent, expRow, seniorityRow, justPromoted }) {
         {!flipped ? (
           <motion.div key="front" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} style={{ display: 'flex', flexDirection: 'column', gap: 8, flex: 1 }}>
             <ExpBar fillPct={exp.fill} level={exp.level} xpInto={exp.xpInto} xpToNext={exp.xpToNext} color={color} />
+            {exp.realMoney.active && (
+              <div>
+                <div style={{ fontSize: 7, color: '#f6ad55', letterSpacing: 1, marginBottom: 2 }}>💰 REAL MONEY</div>
+                <ExpBar fillPct={exp.realMoney.fill} level={exp.realMoney.level} color="#f6ad55" />
+              </div>
+            )}
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 8, color: 'var(--text-faint)', marginTop: 'auto' }}>
               <span>W {exp.wins} · L {exp.losses}</span>
               <span>🔥 {exp.streak}</span>

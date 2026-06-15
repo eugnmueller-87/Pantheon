@@ -510,30 +510,46 @@ def upsert_agent_seniority(scores: dict, system_level_int: int) -> None:
         existing_res = client.table("agent_seniority").select("agent_name, level_int").execute()
         existing = {row["agent_name"]: row["level_int"] for row in (existing_res.data or [])}
 
+        # Real money is live only at the Senior tier (int 3) AND when armed.
+        from core.seniority import real_money_armed, Tier, level_progress_pct
+        armed = real_money_armed()
+
         rows = []
         history_rows = []
         for name, score in scores.items():
+            tier_int = score["tier_int"]            # 0..3 (TRAINEE..SENIOR)
+            live_ok = tier_int >= int(Tier.SENIOR) and armed
+            # Progress through the current level (0..100%) from the win count, so
+            # the dashboard's bar and fetch_agent_progress_pct() are populated.
+            progress_pct = round(level_progress_pct(int(score["wins"])) * 100, 2)
             row = {
                 "agent_name":           name,
-                "level":                score["level"],
-                "level_int":            score["level_int"],
+                "level":                score["tier"],      # tier name (enum-valued column)
+                "level_int":            tier_int,           # tier ordinal (authoritative)
+                "tier":                 score["tier"],
+                "tier_level":           score["level"],     # 1..10 within the tier
+                "rank":                 score["rank"],
+                "wins":                 score["wins"],
+                "progress_pct":         progress_pct,
                 "cleared":              score["cleared"],
                 "criteria":             score["criteria"],
                 "notes":                score["notes"],
-                "max_position_pct":     _level_int_to_max_pos(score["level_int"]),
-                "live_trading_allowed": score["level_int"] >= 1,
+                "max_position_pct":     _tier_int_to_max_pos(tier_int, live_ok),
+                "real_money_unlocked":  tier_int >= int(Tier.SENIOR),
+                "real_money_armed":     armed,
+                "live_trading_allowed": live_ok,
                 "evaluated_at":         score["evaluated_at"],
                 "updated_at":           now,
             }
             rows.append(row)
 
             prev_int = existing.get(name)
-            if prev_int is None or score["level_int"] != prev_int:
+            if prev_int is None or tier_int != prev_int:
                 history_rows.append({
                     "agent_name":  name,
-                    "from_level":  _int_to_level_label(prev_int) if prev_int is not None else None,
-                    "to_level":    score["level"],
-                    "level_int":   score["level_int"],
+                    "from_level":  _int_to_tier_label(prev_int) if prev_int is not None else None,
+                    "to_level":    score["tier"],
+                    "level_int":   tier_int,
                     "criteria":    score["criteria"],
                     "promoted_at": now,
                 })
@@ -546,20 +562,24 @@ def upsert_agent_seniority(scores: dict, system_level_int: int) -> None:
         logger.error("[SUPABASE] upsert_agent_seniority failed: %s", exc)
 
 
-_MAX_POS_BY_LEVEL: dict[int, float] = {0: 0.03, 1: 0.05, 2: 0.05, 3: 0.05}
-_LABEL_BY_LEVEL: dict[int, str]  = {0: "Senior", 1: "Principal", 2: "Managing Director", 3: "Director"}
+# Paper tiers cap at 3%; real money (Senior + armed) uses the 5% live cap.
+_MAX_POS_BY_TIER: dict[int, float] = {0: 0.01, 1: 0.02, 2: 0.03, 3: 0.03}
+_TIER_LABEL_BY_INT: dict[int, str] = {0: "Trainee", 1: "Junior", 2: "Intermediate", 3: "Senior"}
+_REAL_MONEY_MAX_POS = 0.05
 
 
-def _level_int_to_max_pos(level_int: int) -> float:
-    if level_int not in _MAX_POS_BY_LEVEL:
-        raise ValueError(f"Unknown seniority level_int: {level_int}")
-    return _MAX_POS_BY_LEVEL[level_int]
+def _tier_int_to_max_pos(tier_int: int, live_ok: bool) -> float:
+    if live_ok:
+        return _REAL_MONEY_MAX_POS
+    if tier_int not in _MAX_POS_BY_TIER:
+        raise ValueError(f"Unknown seniority tier_int: {tier_int}")
+    return _MAX_POS_BY_TIER[tier_int]
 
 
-def _int_to_level_label(level_int: int) -> str:
-    if level_int not in _LABEL_BY_LEVEL:
-        raise ValueError(f"Unknown seniority level_int: {level_int}")
-    return _LABEL_BY_LEVEL[level_int]
+def _int_to_tier_label(tier_int: int) -> str:
+    if tier_int not in _TIER_LABEL_BY_INT:
+        raise ValueError(f"Unknown seniority tier_int: {tier_int}")
+    return _TIER_LABEL_BY_INT[tier_int]
 
 
 # ── Pending order queue ────────────────────────────────────────────────────────

@@ -1,14 +1,14 @@
 """
 Quality gate — EXP / level system math (core/exp.py).
 
-Pure-function tests, no DB. Covers the load-bearing invariants from
-docs/DASHBOARD_PLAN.md §2:
-  - level curve monotonic + worked examples
-  - band capping (Senior agent can't show Director flair)
+Pure-function tests, no DB. Covers the load-bearing invariants:
+  - level curve monotonic + worked examples (1..40 over four paper tiers)
+  - tier band capping (a Trainee can't show a Senior badge)
   - bar_fill uses the DISPLAYED (capped) level, not raw
   - trade_xp: wins ~3-4x a loss, floored at 0, streak bonus, conviction/size mults
   - r_multiple guards divide-by-zero
   - demotion round-trip: total_xp untouched, badge restores on re-promote
+  - real-money track is separate (rollup splits paper vs real)
 """
 
 import core.exp as exp
@@ -36,20 +36,28 @@ class TestLevelCurve:
         assert exp.exp_level_uncapped(10**12) == exp.MAX_LEVEL
 
 
-# ── Band capping ─────────────────────────────────────────────────────────────
+# ── Tier band capping ────────────────────────────────────────────────────────
 
 class TestBandCapping:
-    def test_senior_caps_at_9(self):
-        # raw L10 but SENIOR (band 1-9) → displayed 9
-        assert exp.cap_level_to_rank(10, 0) == 9
+    def test_trainee_caps_at_10(self):
+        # raw L11 but TRAINEE (band 1-10) → displayed 10
+        assert exp.cap_level_to_rank(11, 0) == 10
 
-    def test_principal_floor_and_cap(self):
-        assert exp.cap_level_to_rank(1, 1) == 10    # floor up to band min
-        assert exp.cap_level_to_rank(99, 1) == 24   # cap at band max
+    def test_junior_floor_and_cap(self):
+        assert exp.cap_level_to_rank(1, 1) == 11    # floor up to band min
+        assert exp.cap_level_to_rank(99, 1) == 20   # cap at band max
 
-    def test_director_band(self):
-        assert exp.cap_level_to_rank(1, 3) == 40
-        assert exp.cap_level_to_rank(50, 3) == 50
+    def test_intermediate_band(self):
+        assert exp.cap_level_to_rank(1, 2) == 21
+        assert exp.cap_level_to_rank(99, 2) == 30
+
+    def test_senior_band(self):
+        assert exp.cap_level_to_rank(1, 3) == 31
+        assert exp.cap_level_to_rank(40, 3) == 40
+        assert exp.cap_level_to_rank(99, 3) == 40   # MAX_LEVEL is 40
+
+    def test_max_level_is_40(self):
+        assert exp.MAX_LEVEL == 40
 
 
 # ── bar_fill uses displayed level ────────────────────────────────────────────
@@ -61,11 +69,11 @@ class TestBarFill:
         assert 0.4 < f < 0.6
 
     def test_fill_uses_capped_level_not_raw(self):
-        # A SENIOR agent past raw L10's XP: displayed is capped at 9, and
-        # bar_fill must be computed against level 9, not raw 10.
-        xp = exp.xp_for_level(10) + 5000
+        # A TRAINEE agent past raw L11's XP: displayed is capped at 10, and
+        # bar_fill must be computed against level 10, not raw 11.
+        xp = exp.xp_for_level(11) + 5000
         displayed = exp.cap_level_to_rank(exp.exp_level_uncapped(xp), 0)
-        assert displayed == 9
+        assert displayed == 10
         f = exp.bar_fill(xp, displayed)
         assert f == 1.0  # past the top of its band → full bar, not negative
 
@@ -125,10 +133,42 @@ class TestRMultiple:
 
 class TestDemotionRoundTrip:
     def test_total_xp_untouched_badge_restores(self):
-        xp = exp.xp_for_level(12)  # well into PRINCIPAL band
-        at_principal = exp.cap_level_to_rank(exp.exp_level_uncapped(xp), 1)
-        demoted      = exp.cap_level_to_rank(exp.exp_level_uncapped(xp), 0)  # back to SENIOR cap
-        repromoted   = exp.cap_level_to_rank(exp.exp_level_uncapped(xp), 1)
-        assert demoted == 9              # capped down cosmetically
-        assert at_principal == repromoted  # exact badge restored, XP never changed
-        assert repromoted >= 10
+        xp = exp.xp_for_level(15)  # well into JUNIOR band (11-20)
+        at_junior  = exp.cap_level_to_rank(exp.exp_level_uncapped(xp), 1)
+        demoted    = exp.cap_level_to_rank(exp.exp_level_uncapped(xp), 0)  # back to TRAINEE cap
+        repromoted = exp.cap_level_to_rank(exp.exp_level_uncapped(xp), 1)
+        assert demoted == 10               # capped down cosmetically to tier ceiling
+        assert at_junior == repromoted     # exact badge restored, XP never changed
+        assert repromoted >= 11
+
+
+# ── Real-money track is separate ──────────────────────────────────────────────
+
+class TestRealMoneyTrack:
+    def test_rollup_splits_paper_and_real(self):
+        # A Senior agent (tier_int 3) with both paper and real XP.
+        state = exp.AgentExpState(
+            agent_name="zeus",
+            total_xp=exp.xp_for_level(33),       # paper: into Senior band
+            seniority_tier_int=3,
+            real_money_xp=exp.xp_for_level(3),   # real: separate curve
+            real_money_wins=4,
+            real_money_losses=1,
+        )
+        row = state.rollup()
+        # Paper level band-capped into Senior (31-40).
+        assert 31 <= row["exp_level"] <= 40
+        # Real-money bar is independent and uncapped by tier.
+        assert row["real_money_level"] == 3
+        assert row["real_money_xp"] == exp.xp_for_level(3)
+        assert row["real_money_wins"] == 4
+        assert row["real_money_losses"] == 1
+        assert "_real_money_bar_fill" in row
+
+    def test_real_money_event_types_are_segregated(self):
+        assert "real_trade" in exp.REAL_MONEY_EVENT_TYPES
+        assert "real_milestone" in exp.REAL_MONEY_EVENT_TYPES
+        assert "trade" not in exp.REAL_MONEY_EVENT_TYPES
+
+    def test_real_unlock_milestone_defined(self):
+        assert exp.MILESTONE_XP["real_money_unlock"] > 0
