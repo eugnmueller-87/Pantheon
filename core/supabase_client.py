@@ -79,6 +79,40 @@ def get_hit_rates(context_key: str) -> Optional[dict]:
         return None
 
 
+def count_winning_trades() -> Optional[int]:
+    """Number of trades that WON (hit = 1). This is the progression currency the
+    seniority system levels up on. Returns None on error so the caller can fall
+    back to SQLite (local dev) rather than silently treating an error as 0 wins."""
+    try:
+        res = (
+            get_client()
+            .table("trades")
+            .select("order_id", count="exact")
+            .eq("hit", 1)
+            .execute()
+        )
+        return res.count or 0
+    except Exception as exc:
+        logger.error("[SUPABASE] count_winning_trades failed: %s", exc)
+        return None
+
+
+def count_closed_trades() -> Optional[int]:
+    """Number of trades with a realized outcome (hit IS NOT NULL). None on error."""
+    try:
+        res = (
+            get_client()
+            .table("trades")
+            .select("order_id", count="exact")
+            .not_.is_("hit", "null")
+            .execute()
+        )
+        return res.count or 0
+    except Exception as exc:
+        logger.error("[SUPABASE] count_closed_trades failed: %s", exc)
+        return None
+
+
 def get_open_trades(min_samples: int = 10) -> list[dict]:
     """Return context_key rows that have enough closed trades for Pythia."""
     try:

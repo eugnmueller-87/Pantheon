@@ -289,6 +289,36 @@ def test_closed_trade_count_counts_wins_and_losses(tmp_db, tmp_skills):
     assert ev._closed_trade_count() == 20
 
 
+def test_win_count_reads_supabase_when_active(tmp_db, tmp_skills, monkeypatch):
+    """Regression: in prod, trades live in Supabase, not the local SQLite file.
+    The win count (which drives leveling) MUST read Supabase when it's active —
+    reading the empty SQLite file left every agent stuck at 0 wins forever."""
+    import core.supabase_client as supa
+
+    # SQLite is empty (mirrors prod: no local trade_log.db rows) ...
+    monkeypatch.setenv("SUPABASE_URL", "https://x.supabase.co")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "svc")
+    # ... but Supabase reports real wins.
+    monkeypatch.setattr(supa, "count_winning_trades", lambda: 120, raising=False)
+    monkeypatch.setattr(supa, "count_closed_trades", lambda: 200, raising=False)
+
+    ev = make_evaluator(tmp_db, tmp_skills, kb=mock_kb(0, 0))
+    assert ev._winning_trade_count() == 120   # from Supabase, NOT the empty SQLite
+    assert ev._closed_trade_count() == 200
+
+
+def test_win_count_falls_back_to_sqlite_on_supabase_error(tmp_db, tmp_skills, monkeypatch):
+    """If the Supabase query errors (returns None), fall back to SQLite rather
+    than silently treating the error as 0 wins."""
+    import core.supabase_client as supa
+    _insert_wins(tmp_db, 5)
+    monkeypatch.setenv("SUPABASE_URL", "https://x.supabase.co")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "svc")
+    monkeypatch.setattr(supa, "count_winning_trades", lambda: None, raising=False)  # error
+    ev = make_evaluator(tmp_db, tmp_skills, kb=mock_kb(0, 0))
+    assert ev._winning_trade_count() == 5   # SQLite fallback, not 0
+
+
 # ---------------------------------------------------------------------------
 # SeniorityReport shape
 # ---------------------------------------------------------------------------

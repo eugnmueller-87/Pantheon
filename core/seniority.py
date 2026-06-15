@@ -297,6 +297,13 @@ class SeniorityEvaluator:
         self._skills_dir = skills_dir
         self._alert_fn   = alert_fn
         self._last_ranks: dict[str, tuple[Tier, int]] = {}
+        # Trades persist to Supabase in prod and SQLite in local dev. The win
+        # count that drives leveling MUST read whichever backend actually holds
+        # the trades — reading SQLite while prod writes Supabase left every agent
+        # stuck at 0 wins (could never level up).
+        self._use_supabase = bool(
+            os.getenv("SUPABASE_URL") and os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+        )
 
     # ------------------------------------------------------------------
     # Public API
@@ -373,6 +380,14 @@ class SeniorityEvaluator:
     def _winning_trade_count(self) -> int:
         """Closed trades that WON (hit = 1). This is the progression currency —
         you level up on successes, not on signal volume or stubbed metrics."""
+        if self._use_supabase:
+            try:
+                import core.supabase_client as supa
+                n = supa.count_winning_trades()
+                if n is not None:        # None = query error → fall through to SQLite
+                    return n
+            except Exception:
+                pass
         rows = self._sqlite_query("SELECT COUNT(*) FROM trades WHERE hit = 1")
         try:
             return int(rows[0][0]) if rows and rows[0] else 0
@@ -382,6 +397,14 @@ class SeniorityEvaluator:
     def _closed_trade_count(self) -> int:
         """Closed trades with any realized outcome (hit IS NOT NULL). Kept for
         callers/tests that ask 'how many trades have actually resolved'."""
+        if self._use_supabase:
+            try:
+                import core.supabase_client as supa
+                n = supa.count_closed_trades()
+                if n is not None:
+                    return n
+            except Exception:
+                pass
         rows = self._sqlite_query("SELECT COUNT(*) FROM trades WHERE hit IS NOT NULL")
         try:
             return int(rows[0][0]) if rows and rows[0] else 0
