@@ -511,7 +511,7 @@ def upsert_agent_seniority(scores: dict, system_level_int: int) -> None:
         existing = {row["agent_name"]: row["level_int"] for row in (existing_res.data or [])}
 
         # Real money is live only at the Senior tier (int 3) AND when armed.
-        from core.seniority import real_money_armed, Tier, level_progress_pct
+        from core.seniority import Tier, level_progress_pct, real_money_armed
         armed = real_money_armed()
 
         rows = []

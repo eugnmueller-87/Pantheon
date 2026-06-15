@@ -64,7 +64,7 @@ def _make_zeus(extra_env: dict | None = None, paper: bool = True) -> ZeusOrchest
             stack.enter_context(patch("core.knowledge_base.KnowledgeBase"))
             if not paper:
                 # Force the startup hard-gate's evaluation to see a Senior system.
-                from core.seniority import SeniorityReport, Tier, AgentScore
+                from core.seniority import AgentScore, SeniorityReport, Tier
                 agents = {a: AgentScore(agent=a, tier=Tier.SENIOR, level=10, cleared=True)
                           for a in ("zeus", "pythia", "artemis", "apollo",
                                     "hades", "icarus", "ares", "argus")}

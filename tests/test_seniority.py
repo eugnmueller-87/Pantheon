@@ -15,16 +15,16 @@ from unittest.mock import MagicMock
 import pytest
 
 from core.seniority import (
-    Tier,
-    SeniorityEvaluator,
     WINS_PER_LEVEL,
     WINS_PER_TIER,
+    SeniorityEvaluator,
+    Tier,
     level_from_wins,
-    tier_and_level_from_total_wins,
-    wins_to_next_level,
     level_progress_pct,
     real_money_armed,
     real_money_live,
+    tier_and_level_from_total_wins,
+    wins_to_next_level,
 )
 
 # ---------------------------------------------------------------------------
