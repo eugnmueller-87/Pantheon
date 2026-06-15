@@ -18,9 +18,16 @@
 -- to TEXT lets us store the new tier names without enum surgery. The history
 -- table references the same enum, so convert those too, then drop the type.
 
+-- Drop the enum-typed DEFAULT first, else the type can't be dropped (the column
+-- default expression still references seniority_level even after the type cast).
+ALTER TABLE agent_seniority ALTER COLUMN level DROP DEFAULT;
+
 ALTER TABLE agent_seniority         ALTER COLUMN level     TYPE TEXT;
 ALTER TABLE agent_seniority_history ALTER COLUMN from_level TYPE TEXT;
 ALTER TABLE agent_seniority_history ALTER COLUMN to_level   TYPE TEXT;
+
+-- Restore a plain-text default for the (now TEXT) level column.
+ALTER TABLE agent_seniority ALTER COLUMN level SET DEFAULT 'Trainee';
 
 -- The system_seniority view depends on level_int only, but recreate it below
 -- so it reports tier semantics. Drop first so the type can go.
@@ -72,6 +79,9 @@ CREATE VIEW system_seniority AS
     FROM agent_seniority;
 
 -- ── RPCs updated for the new shape ────────────────────────────────────────────
+-- Drop first: the return type (OUT params) changed, so CREATE OR REPLACE alone
+-- errors with "cannot change return type of existing function".
+DROP FUNCTION IF EXISTS get_seniority_report();
 CREATE OR REPLACE FUNCTION get_seniority_report()
 RETURNS TABLE (
     agent_name           TEXT,

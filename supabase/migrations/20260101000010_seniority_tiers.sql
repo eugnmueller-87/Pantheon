@@ -9,9 +9,13 @@
 -- Idempotent; resets all agents to Trainee L1.
 -- ============================================================
 
+ALTER TABLE agent_seniority ALTER COLUMN level DROP DEFAULT;
+
 ALTER TABLE agent_seniority         ALTER COLUMN level     TYPE TEXT;
 ALTER TABLE agent_seniority_history ALTER COLUMN from_level TYPE TEXT;
 ALTER TABLE agent_seniority_history ALTER COLUMN to_level   TYPE TEXT;
+
+ALTER TABLE agent_seniority ALTER COLUMN level SET DEFAULT 'Trainee';
 
 DROP VIEW IF EXISTS system_seniority;
 DROP TYPE IF EXISTS seniority_level;
@@ -55,6 +59,7 @@ CREATE VIEW system_seniority AS
         MAX(evaluated_at)                                           AS last_evaluated_at
     FROM agent_seniority;
 
+DROP FUNCTION IF EXISTS get_seniority_report();
 CREATE OR REPLACE FUNCTION get_seniority_report()
 RETURNS TABLE (
     agent_name           TEXT,
