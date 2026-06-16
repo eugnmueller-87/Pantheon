@@ -97,6 +97,47 @@ def count_winning_trades() -> Optional[int]:
         return None
 
 
+def count_hades_compliance_kills() -> Optional[int]:
+    """How many signals Hades actually killed at the compliance stage — real
+    runtime evidence the compliance gate is doing work (vs grepping hades.py for
+    the string 'ofac'). None on error."""
+    try:
+        res = (
+            get_client()
+            .table("decision_traces")
+            .select("trace_id", count="exact")
+            .eq("killed_at_stage", "hades")
+            .execute()
+        )
+        return res.count or 0
+    except Exception as exc:
+        logger.error("[SUPABASE] count_hades_compliance_kills failed: %s", exc)
+        return None
+
+
+def zeus_override_doc_rate(min_samples: int = 5) -> Optional[float]:
+    """Of approved trades where ZEUS overrode the Pattern verdict, the share with
+    a documented reason (non-empty, >= 40 chars). Returns 0.0-1.0, or None when
+    fewer than min_samples overrides exist (insufficient sample → not evaluable,
+    which the caller treats as 'does not clear')."""
+    try:
+        res = (
+            get_client()
+            .table("decision_traces")
+            .select("zeus_override_reason")
+            .eq("zeus_override", True)
+            .execute()
+        )
+        rows = res.data or []
+        if len(rows) < min_samples:
+            return None
+        documented = sum(1 for r in rows if len((r.get("zeus_override_reason") or "").strip()) >= 40)
+        return documented / len(rows)
+    except Exception as exc:
+        logger.error("[SUPABASE] zeus_override_doc_rate failed: %s", exc)
+        return None
+
+
 def count_closed_trades() -> Optional[int]:
     """Number of trades with a realized outcome (hit IS NOT NULL). None on error."""
     try:

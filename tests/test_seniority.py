@@ -320,6 +320,40 @@ def test_win_count_falls_back_to_sqlite_on_supabase_error(tmp_db, tmp_skills, mo
 
 
 # ---------------------------------------------------------------------------
+# Section 5 — real runtime gate (Hades compliance), not a source-string grep
+# ---------------------------------------------------------------------------
+
+def _score():
+    from core.seniority import AgentScore
+    return AgentScore(agent="hades", tier=Tier.TRAINEE, level=1)
+
+
+def test_clear_hades_uses_real_kill_count_when_supabase(tmp_db, tmp_skills, monkeypatch):
+    import core.supabase_client as supa
+    monkeypatch.setenv("SUPABASE_URL", "https://x.supabase.co")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "svc")
+    ev = make_evaluator(tmp_db, tmp_skills, kb=mock_kb(0, 0))
+
+    # No compliance kills recorded → does NOT clear (even though hades.py exists).
+    monkeypatch.setattr(supa, "count_hades_compliance_kills", lambda: 0, raising=False)
+    assert ev._clear_hades(_score()) is False
+
+    # Real compliance kills recorded → clears.
+    monkeypatch.setattr(supa, "count_hades_compliance_kills", lambda: 4, raising=False)
+    assert ev._clear_hades(_score()) is True
+
+
+def test_clear_hades_falls_back_to_source_when_supabase_off(tmp_db, tmp_skills, monkeypatch):
+    # No Supabase env → falls back to the source presence check. The real
+    # repo's agents/hades.py contains 'ofac', so this clears in offline dev.
+    monkeypatch.delenv("SUPABASE_URL", raising=False)
+    monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
+    ev = make_evaluator(tmp_db, tmp_skills, kb=mock_kb(0, 0))
+    # Result depends on the real source file; assert it doesn't raise and is bool.
+    assert isinstance(ev._clear_hades(_score()), bool)
+
+
+# ---------------------------------------------------------------------------
 # SeniorityReport shape
 # ---------------------------------------------------------------------------
 
