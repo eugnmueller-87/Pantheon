@@ -44,6 +44,8 @@ def binding_constraint(stage: str | None, reason: str | None) -> str | None:
     if not stage:
         return None
     r = (reason or "").lower()
+    if stage == "icarus":
+        return "out_of_universe"
     if stage == "hades":
         return "sanctions" if ("ofac" in r or "sanction" in r) else "compliance_block"
     if stage in ("trend", "artemis"):

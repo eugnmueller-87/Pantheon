@@ -16,6 +16,11 @@ def test_no_stage_returns_none():
     assert bc(None, "anything") is None
 
 
+def test_icarus_is_out_of_universe():
+    assert bc("icarus", "out_of_universe: SpaceX") == "out_of_universe"
+    assert bc("icarus", "") == "out_of_universe"
+
+
 def test_hades_maps_compliance_and_sanctions():
     assert bc("hades", "OFAC blocklist hit") == "sanctions"
     assert bc("hades", "ESG screen failed") == "compliance_block"

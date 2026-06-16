@@ -8,3 +8,5 @@ S006,Apple partnership announced,positive_news,3,AAPL,TestCorp,18.0,200.0,,Clean
 S007,NVIDIA beats estimates,earnings_surprise,3,NVDA,TestCorp,18.0,150.0,,First NVDA approval — concentration cap permits one
 S008,NVIDIA new GPU launch,positive_news,3,NVDA,TestCorp,18.0,150.0,concentration,Second NVDA in same run — concentration must kill
 S009,TSMC fab fire — production halted,supplier_disruption,3,TSM,TSMC,18.0,100.0,,Disruption signal — clean SELL path with distinct ticker
+S010,SpaceX eyes mega funding round,positive_news,3,TSLA,SpaceX,18.0,150.0,icarus,SpaceX is private — must drop out_of_universe at Icarus NOT map to TSLA
+S011,ByteDance valuation surges in private round,positive_news,3,,ByteDance,18.0,150.0,icarus,Private company + no resolvable ticker — clean out_of_universe drop

@@ -179,6 +179,13 @@ class ReplayHarness:
         patcher2 = patch("agents.artemis.yf.Ticker", side_effect=_yfinance_factory(row.vix, row.price))
 
         with patcher, patcher2:
+            # Stage 0 — Icarus universe gate. Private / non-tradeable names drop
+            # cleanly here (out_of_universe) before any LLM call. Mirrors
+            # IcarusAgent._is_private_supplier so the harness covers lever 1.
+            from agents.icarus import _is_private_supplier
+            if _is_private_supplier(row.supplier) or not row.tickers:
+                return ReplayResult(row, "icarus", f"out_of_universe: {row.supplier or 'no ticker'}")
+
             # Stage 1 — Hades
             filtered = self.hades.filter(raw)
             if filtered is None:
@@ -282,13 +289,23 @@ def summarize(results: list[ReplayResult]) -> str:
 # ──────────────────────────────────────────────────────────────────────────────
 
 def main(argv: list[str]) -> int:
+    # The confusion matrix uses box-drawing/ANSI chars; force UTF-8 so the
+    # Windows cp1252 console doesn't UnicodeEncodeError on the summary.
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass
     csv_path = Path(argv[1]) if len(argv) > 1 else Path(__file__).parent / "fixtures.csv"
     if not csv_path.exists():
         print(f"CSV not found: {csv_path}", file=sys.stderr)
         return 2
 
     import tempfile
-    with tempfile.TemporaryDirectory() as td:
+    # ignore_cleanup_errors: on Windows the SQLite trade_log handle may still be
+    # open when the temp dir is torn down (can't unlink an open file); the run's
+    # results are already computed by then, so don't let teardown crash the run.
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
         harness = ReplayHarness(Path(td))
         rows = load_csv(csv_path)
         results = harness.run_all(rows)
