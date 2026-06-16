@@ -62,7 +62,6 @@ from agents.hades import HadesAgent
 from agents.pythia import PythiaAgent
 from core.types import RawSignal, Severity, SignalCategory
 
-
 # ──────────────────────────────────────────────────────────────────────────────
 # CSV row
 # ──────────────────────────────────────────────────────────────────────────────
