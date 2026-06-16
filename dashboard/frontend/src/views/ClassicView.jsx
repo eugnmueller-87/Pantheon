@@ -41,15 +41,36 @@ function useClassicData(status) {
       income: i === 0 ? 0 : +(p.balance - series[i - 1].balance).toFixed(2),
     }))
 
-    // Today's realized P&L + trade count from trades recorded today.
+    // Realized € for ONE closed trade = pnl_pct × position notional (qty × entry
+    // price) — NOT pnl_pct × total equity. Multiplying by the whole €4000 book
+    // inflated every figure 4-30× (a -3% loss on a 1% position showed as -€120
+    // instead of ~-€4). Falls back to position_pct × equity only when qty/fill
+    // are missing, so a row without execution detail still estimates sanely.
+    const tradeEur = (t) => {
+      if (t.pnl_pct == null) return 0
+      const qty = Number(t.qty ?? 0), fill = Number(t.fill_price ?? 0)
+      if (qty && fill) return t.pnl_pct * qty * fill
+      const posPct = Number(t.position_pct ?? 0)
+      return posPct ? t.pnl_pct * posPct * eqVal : 0
+    }
+
+    // Today's realized P&L + trade count from CLOSED trades recorded today.
     const today = new Date().toISOString().slice(0, 10)
     const todays = (trades || []).filter(t => (t.recorded_at || '').slice(0, 10) === today)
-    const profitToday = todays.reduce((s, t) => s + (t.pnl_pct != null ? t.pnl_pct * eqVal : 0), 0)
+    const profitToday = todays
+      .filter(t => t.hit != null)
+      .reduce((s, t) => s + tradeEur(t), 0)
 
-    // Profit last 7 days from equity series.
-    const wk = withIncome.slice(-7)
-    const profit7d = wk.length ? wk[wk.length - 1].balance - wk[0].balance : 0
-    const pct7d = wk.length && wk[0].balance ? (profit7d / wk[0].balance) * 100 : 0
+    // Profit last 7 days — realized € from CLOSED trades in the window, same
+    // source/formula as Top Performers so the panels reconcile. (The equity
+    // series stays the Balance line; it doesn't move on backfilled closes, so
+    // deriving realized P&L from it would contradict the trade panels.)
+    const weekAgo = new Date(Date.now() - 7 * 864e5).toISOString().slice(0, 10)
+    const closedWk = (trades || []).filter(
+      t => t.hit != null && (t.closed_at || t.recorded_at || '').slice(0, 10) >= weekAgo,
+    )
+    const profit7d = closedWk.reduce((s, t) => s + tradeEur(t), 0)
+    const pct7d = eqVal ? (profit7d / eqVal) * 100 : 0
 
     // Unrealized P&L from open positions (live socket or DB fallback).
     const unrealized = positions.reduce((s, p) => s + Number(p.unrealized_pnl ?? 0), 0)
@@ -69,10 +90,11 @@ function useClassicData(status) {
       .filter(p => p.value > 0)
       .sort((a, b) => b.value - a.value)
 
-    // Top performers — closed trades ranked by realized P&L (% → € on equity).
+    // Top performers — closed trades ranked by realized € (qty × fill × pnl_pct,
+    // via tradeEur — same source as profitToday/profit7d so the panels agree).
     const closed = (trades || []).filter(t => t.hit != null && t.pnl_pct != null)
     const bySym = {}
-    closed.forEach(t => { bySym[t.symbol] = (bySym[t.symbol] || 0) + t.pnl_pct * eqVal })
+    closed.forEach(t => { bySym[t.symbol] = (bySym[t.symbol] || 0) + tradeEur(t) })
     const performers = Object.entries(bySym)
       .map(([name, pnl]) => ({ name, pnl: +pnl.toFixed(2) }))
       .sort((a, b) => b.pnl - a.pnl)
