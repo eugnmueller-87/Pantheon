@@ -11,9 +11,14 @@ import logging
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from core.agent_knowledge import AgentKnowledgeBase
 from core.types import AgentHealth, SignalCategory, SizedSignal, TradeResult
+
+# Market timezones — DST-correct via the IANA database (stdlib zoneinfo).
+_ET  = ZoneInfo("America/New_York")
+_CET = ZoneInfo("Europe/Berlin")
 
 logger = logging.getLogger("ares")
 
@@ -63,14 +68,21 @@ def _is_terminal_ib_error(exc: Exception) -> bool:
 
 def _same_session(t1: datetime, t2: datetime) -> bool:
     """Return True if both timestamps fall within the same trading session.
-    Uses ET date for NYSE trades and CET date for XETRA trades.
-    Conservative: compares both offsets and returns True only if both agree.
+
+    Compares the ET date (NYSE) and the CET date (XETRA); same session if either
+    market's local date matches. Uses zoneinfo for correct DST handling — the old
+    fixed `timedelta(hours=4)` was EDT-only and wrong Nov–Mar, which could flip
+    the ET date across midnight UTC in winter and expire pending orders early.
     """
-    ET_OFFSET = timedelta(hours=4)   # UTC-4 EDT approximation
-    d1_et  = (t1 - ET_OFFSET).date()
-    d2_et  = (t2 - ET_OFFSET).date()
-    d1_cet = (t1 + timedelta(hours=1)).date()
-    d2_cet = (t2 + timedelta(hours=1)).date()
+    # Tolerate naive timestamps (assume UTC) so callers passing either work.
+    if t1.tzinfo is None:
+        t1 = t1.replace(tzinfo=timezone.utc)
+    if t2.tzinfo is None:
+        t2 = t2.replace(tzinfo=timezone.utc)
+    d1_et  = t1.astimezone(_ET).date()
+    d2_et  = t2.astimezone(_ET).date()
+    d1_cet = t1.astimezone(_CET).date()
+    d2_cet = t2.astimezone(_CET).date()
     return d1_et == d2_et or d1_cet == d2_cet
 
 
