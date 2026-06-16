@@ -8,13 +8,20 @@ Imports only from core.types — never from other agents.
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Optional
 
 import yfinance as yf
 
 from core.agent_knowledge import AgentKnowledgeBase
-from core.types import AgentHealth, FilteredSignal, MacroContext, MarketRegime
+from core.types import (
+    AgentHealth,
+    FilteredSignal,
+    MacroContext,
+    MacroFetchError,
+    MarketRegime,
+)
 
 logger = logging.getLogger("artemis")
 
@@ -29,6 +36,7 @@ class ArtemisAgent:
         self._cache_ttl = cache_ttl_seconds
         self._cached:    Optional[MacroContext] = None
         self._cache_time: Optional[datetime]   = None
+        self._last_macro_alert: Optional[datetime] = None  # rate-limit fetch alerts
         self.kb = AgentKnowledgeBase("artemis")
 
     def health(self) -> AgentHealth:
@@ -53,7 +61,23 @@ class ArtemisAgent:
         return ctx
 
     def _fetch_macro(self) -> MacroContext:
-        vix          = self._fetch_vix()
+        try:
+            vix = self._fetch_vix()
+        except MacroFetchError as exc:
+            # Fail CLOSED: never operate on a fabricated benign VIX. Return a
+            # suppressed UNKNOWN context with the -1.0 sentinel so downstream
+            # (ZEUS) renders "VIX UNAVAILABLE" and treats macro as not-benign.
+            logger.error("[ARTEMIS] macro data unavailable (%s) — suppressing", exc)
+            self._alert_macro_unavailable(str(exc))
+            return MacroContext(
+                fetched_at      = datetime.now(timezone.utc),
+                regime          = MarketRegime.UNKNOWN,
+                vix             = -1.0,
+                sp500_1m_return = 0.0,
+                sector_momentum = {},
+                suppress        = True,
+                suppress_reason = "macro data unavailable",
+            )
         sp500_return = self._fetch_sp500_return()
         regime       = self._classify_regime(sp500_return, vix)
         sectors      = self._fetch_sector_momentum()
@@ -67,13 +91,37 @@ class ArtemisAgent:
         )
 
     def _fetch_vix(self) -> float:
+        """Fetch live VIX. Raises MacroFetchError on failure or empty data —
+        callers fail closed rather than substitute a benign default."""
         try:
             hist = yf.Ticker("^VIX").history(period="1d")
-            if not hist.empty:
-                return float(hist["Close"].iloc[-1])
         except Exception as exc:
-            logger.warning("[ARTEMIS] VIX fetch failed: %s", exc)
-        return 20.0
+            raise MacroFetchError(f"VIX fetch failed: {exc}") from exc
+        if hist.empty:
+            raise MacroFetchError("VIX fetch returned no data")
+        return float(hist["Close"].iloc[-1])
+
+    def _alert_macro_unavailable(self, detail: str) -> None:
+        """Emit at most one Telegram alert per hour on persistent macro-fetch
+        failure (best-effort; no-op if Telegram env vars aren't set)."""
+        now = datetime.now(timezone.utc)
+        if self._last_macro_alert and (now - self._last_macro_alert).total_seconds() < 3600:
+            return
+        self._last_macro_alert = now
+        msg = f"⚠️ ARTEMIS: macro data unavailable — {detail}. Operating suppressed."
+        token = os.getenv("TELEGRAM_BOT_TOKEN")
+        chat  = os.getenv("TELEGRAM_CHAT_ID")
+        if not (token and chat):
+            logger.info("[ARTEMIS] Alert (no Telegram): %s", msg)
+            return
+        try:
+            import requests
+            requests.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                json={"chat_id": chat, "text": msg}, timeout=5,
+            )
+        except Exception as exc:
+            logger.warning("[ARTEMIS] Telegram alert failed: %s", exc)
 
     def _fetch_sp500_return(self) -> float:
         try:

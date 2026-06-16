@@ -56,6 +56,13 @@ from core.watchdog import Watchdog
 logger = logging.getLogger("zeus")
 
 
+def _fmt_vix(vix: float) -> str:
+    """Render VIX for the LLM prompt. The -1.0 sentinel (Artemis macro fetch
+    failed) must read as UNAVAILABLE — never as a benign number ZEUS could
+    treat as safe."""
+    return "UNAVAILABLE" if vix is None or vix < 0 else f"{vix:.1f}"
+
+
 @dataclass
 class ZeusConfig:
     max_portfolio_drawdown_pct:   float = 0.08
@@ -866,7 +873,7 @@ Category:  {sized.category.value}
 Severity:  {sized.severity.value}
 Tickers:   {sized.affected_tickers}
 
-MACRO: regime={macro.regime.value} | VIX={macro.vix:.1f} | SPY 1m={macro.sp500_1m_return*100:.1f}%
+MACRO: regime={macro.regime.value} | VIX={_fmt_vix(macro.vix)} | SPY 1m={macro.sp500_1m_return*100:.1f}%
 QUANT: Pythia confidence={sized.confidence:.2f}, proposed size={sized.position_size_pct*100:.2f}%
 {live_block}
 ═══════════════════════════════════════════════
@@ -1064,7 +1071,7 @@ Tickers:    {sized.affected_tickers}
 TEAM ASSESSMENT SUMMARY
 ═══════════════════════════════════════════════
 Compliance (Hades):    score {sized.original.compliance_score:.2f}/1.0 | {'; '.join(sized.original.notes) or 'clean'}
-Macro (Artemis):       regime={macro.regime.value} | VIX={macro.vix:.1f} | SPY 1m={macro.sp500_1m_return*100:.1f}%
+Macro (Artemis):       regime={macro.regime.value} | VIX={_fmt_vix(macro.vix)} | SPY 1m={macro.sp500_1m_return*100:.1f}%
                        sector momentum: {macro.sector_momentum}
 Quant sizing (Pythia): pattern confidence={sized.confidence:.2f} | proposed size={sized.position_size_pct*100:.2f}%
 
