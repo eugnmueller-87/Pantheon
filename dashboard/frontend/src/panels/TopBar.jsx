@@ -15,8 +15,8 @@ export function TopBar({ status, connected, metrics, send }) {
         <span style={{ fontSize: 15, fontWeight: 700, color: 'var(--blue)', letterSpacing: 3 }}>⚡ PANTHEON OS</span>
         <span style={{
           fontSize: 9, padding: '2px 6px', borderRadius: 2,
-          background: status?.paper_trading ? '#0d1f36' : '#3d0808',
-          border: `1px solid ${status?.paper_trading ? '#2d4a6e' : '#7a1515'}`,
+          background: status?.paper_trading ? 'var(--bg-signal)' : 'var(--bg-kill)',
+          border: `1px solid ${status?.paper_trading ? '#bcd2f7' : '#f3c4c4'}`,
           color: status?.paper_trading ? 'var(--blue)' : 'var(--red)', letterSpacing: 1,
         }}>
           {status?.paper_trading ? 'PAPER' : '⚠ LIVE'}
@@ -46,10 +46,10 @@ export function TopBar({ status, connected, metrics, send }) {
 
       {/* Controls */}
       <div style={{ display: 'flex', gap: 6, minWidth: 180, justifyContent: 'flex-end' }}>
-        <Button bg="#0d1f36" border="#2d4a6e" color="var(--blue)" onClick={() => send('run_pipeline')}>▶ RUN</Button>
+        <Button bg="var(--bg-signal)" border="#bcd2f7" color="var(--blue)" onClick={() => send('run_pipeline')}>▶ RUN</Button>
         {pipeStatus === 'RUNNING'
-          ? <Button bg="#150505" border="#7a1515" color="var(--red)" onClick={() => send('halt')}>■ HALT</Button>
-          : <Button bg="#071510" border="#1a4731" color="var(--green)" onClick={() => send('resume')}>▶ RESUME</Button>}
+          ? <Button bg="var(--bg-kill)" border="#f3c4c4" color="var(--red)" onClick={() => send('halt')}>■ HALT</Button>
+          : <Button bg="var(--bg-trade)" border="#bce3cb" color="var(--green)" onClick={() => send('resume')}>▶ RESUME</Button>}
       </div>
     </div>
   )

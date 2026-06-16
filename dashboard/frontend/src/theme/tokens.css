@@ -1,40 +1,43 @@
-/* ZEUS dashboard design tokens — extracted from the original inline palette so
-   the look is centralized and themeable. "AAA dark trading terminal meets RPG". */
+/* ZEUS dashboard design tokens — centralized, themeable palette.
+   LIGHT theme (SH-Stark style): clean white cards, readable dark text, soft
+   borders. Every view reads these vars, so flipping the values here re-skins
+   the whole app — LIVE/PANTHEON/PORTFOLIO/COST included — without touching a
+   single component. Accents are darkened so they read on white. */
 :root {
   /* Surfaces */
-  --bg: #060a12;
-  --panel: #0b0f1a;
-  --panel-2: #0f1420;
-  --border: #1a2540;
-  --border-soft: #0f1420;
+  --bg: #f4f6fb;
+  --panel: #ffffff;
+  --panel-2: #f7f9fc;
+  --border: #e6e9f0;
+  --border-soft: #eef1f6;
 
-  /* Text */
-  --text: #e2e8f0;
-  --text-dim: #8090a8;
-  --text-faint: #4a5568;
-  --text-ghost: #3a4a6a;
-  --text-mute: #2d3748;
+  /* Text (dark-on-light; "dim → faint → ghost → mute" stay in that order) */
+  --text: #2b3043;
+  --text-dim: #4b5266;
+  --text-faint: #7a8194;
+  --text-ghost: #9aa1b1;
+  --text-mute: #c2c8d4;
 
-  /* Accents */
-  --blue: #63b3ed;
-  --purple: #9f7aea;
-  --green: #48bb78;
-  --green-bright: #68d391;
-  --red: #fc8181;
-  --amber: #f6ad55;
-  --yellow: #f6e05e;
-  --cyan: #76e4f7;
+  /* Accents — darkened from the old neon set so they're legible on white */
+  --blue: #2563eb;
+  --purple: #7c3aed;
+  --green: #16a34a;
+  --green-bright: #15803d;
+  --red: #dc2626;
+  --amber: #d97706;
+  --yellow: #ca8a04;
+  --cyan: #0891b2;
 
   /* Seniority rank tiers (used by EXP bars / level badges) */
-  --rank-senior: #48bb78;
-  --rank-principal: #63b3ed;
-  --rank-md: #9f7aea;
-  --rank-director: #f6ad55;
+  --rank-senior: #16a34a;
+  --rank-principal: #2563eb;
+  --rank-md: #7c3aed;
+  --rank-director: #d97706;
 
-  /* Event-tinted backgrounds */
-  --bg-trade: #071510;
-  --bg-kill: #150505;
-  --bg-signal: #040d18;
+  /* Event-tinted backgrounds — soft pastels instead of near-black tints */
+  --bg-trade: #e7f6ec;
+  --bg-kill: #fdeaea;
+  --bg-signal: #e8effd;
 
   /* Shape */
   --radius: 6px;
@@ -47,9 +50,11 @@
 
 * { box-sizing: border-box; }
 
-::-webkit-scrollbar { width: 4px; }
-::-webkit-scrollbar-track { background: var(--panel); }
-::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #d8dce6; border-radius: 3px; }
+
+body { background: var(--bg); }
 
 @keyframes blink    { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
 @keyframes pulse    { 0%, 100% { box-shadow: 0 0 4px #63b3ed33; } 50% { box-shadow: 0 0 14px #63b3ed88; } }

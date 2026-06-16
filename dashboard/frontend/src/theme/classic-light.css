@@ -1,0 +1,51 @@
+/* Light "classic" theme — SH-Stark/trading-dashboard look, scoped under
+   .classic-light so it never leaks into the dark Pantheon terminal. A clean,
+   friendly card UI: white panels, soft shadows, pastel KPI tiles. */
+.classic-light {
+  --c-bg: #f4f6fb;
+  --c-card: #ffffff;
+  --c-border: #eef0f6;
+  --c-text: #2b3043;
+  --c-text-dim: #6b7280;
+  --c-text-faint: #9aa1b1;
+
+  --c-green: #16a34a;
+  --c-green-soft: #e7f6ec;
+  --c-blue: #2563eb;
+  --c-blue-soft: #e8effd;
+  --c-red: #dc2626;
+  --c-red-soft: #fdeaea;
+  --c-amber: #d97706;
+  --c-amber-soft: #fdf3e3;
+  --c-purple: #7c3aed;
+  --c-purple-soft: #f0e9fd;
+
+  --c-shadow: 0 1px 3px rgba(16, 24, 40, 0.06), 0 1px 2px rgba(16, 24, 40, 0.04);
+  --c-radius: 14px;
+
+  font-family: 'Inter', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  color: var(--c-text);
+  background: var(--c-bg);
+}
+
+/* Allocation palette for the positions pie. */
+.classic-light {
+  --c-pie-0: #fb7185; --c-pie-1: #60a5fa; --c-pie-2: #34d399;
+  --c-pie-3: #a78bfa; --c-pie-4: #fbbf24; --c-pie-5: #22d3ee;
+  --c-pie-6: #f472b6; --c-pie-7: #4ade80; --c-pie-8: #818cf8;
+  --c-pie-9: #fca5a5; --c-pie-10: #2dd4bf; --c-pie-11: #c084fc;
+}
+
+.classic-light .c-card {
+  background: var(--c-card);
+  border: 1px solid var(--c-border);
+  border-radius: var(--c-radius);
+  box-shadow: var(--c-shadow);
+}
+
+.classic-light .c-kpi-label { font-size: 11px; color: var(--c-text-dim); font-weight: 500; }
+.classic-light .c-kpi-value { font-size: 24px; font-weight: 700; letter-spacing: -0.5px; font-variant-numeric: tabular-nums; }
+
+.classic-light .c-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+.classic-light .c-scroll::-webkit-scrollbar-track { background: transparent; }
+.classic-light .c-scroll::-webkit-scrollbar-thumb { background: #d8dce6; border-radius: 4px; }

@@ -23,15 +23,16 @@ export const ALL_AGENTS = [
   { id: 'apollo', label: 'APOLLO', sub: 'Research · daily', icon: '📚' },
 ]
 
+// Light theme: dark text on soft pastel row backgrounds (was neon-on-near-black).
 export const TYPE_CFG = {
-  trade_placed:      { label: 'TRADE',  color: '#48bb78', bg: '#071510' },
-  signal_killed:     { label: 'KILL',   color: '#fc8181', bg: '#150505' },
-  icarus_signal:     { label: 'SIGNAL', color: '#63b3ed', bg: '#040d18' },
-  pipeline_start:    { label: 'START',  color: '#4a5568', bg: '#0d1117' },
-  pipeline_complete: { label: 'DONE',   color: '#68d391', bg: '#0d1117' },
-  halt:              { label: 'HALT',   color: '#fc8181', bg: '#150505' },
-  resume:            { label: 'RESUME', color: '#48bb78', bg: '#071510' },
-  error:             { label: 'ERROR',  color: '#fc8181', bg: '#150505' },
+  trade_placed:      { label: 'TRADE',  color: '#15803d', bg: '#e7f6ec' },
+  signal_killed:     { label: 'KILL',   color: '#dc2626', bg: '#fdeaea' },
+  icarus_signal:     { label: 'SIGNAL', color: '#2563eb', bg: '#e8effd' },
+  pipeline_start:    { label: 'START',  color: '#6b7280', bg: '#f1f3f7' },
+  pipeline_complete: { label: 'DONE',   color: '#15803d', bg: '#eef6f0' },
+  halt:              { label: 'HALT',   color: '#dc2626', bg: '#fdeaea' },
+  resume:            { label: 'RESUME', color: '#15803d', bg: '#e7f6ec' },
+  error:             { label: 'ERROR',  color: '#dc2626', bg: '#fdeaea' },
 }
 
 // Allocation / category palette.

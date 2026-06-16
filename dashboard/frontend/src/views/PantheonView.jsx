@@ -28,10 +28,10 @@ function SystemBanner({ seniorityRows }) {
   const liveAllowed = rows.length > 0 && rows.every(r => r.live_trading_allowed === true)
   const maxPos = liveAllowed ? 5 : 3
   const badge = liveAllowed
-    ? { text: '🔓 LIVE — REAL MONEY', color: 'var(--green)', bg: '#071510', border: '#1a4731' }
+    ? { text: '🔓 LIVE — REAL MONEY', color: 'var(--green)', bg: 'var(--bg-trade)', border: '#bce3cb' }
     : unlocked
-      ? { text: '⚠️ REAL UNLOCKED · DISARMED', color: '#f6ad55', bg: '#1a1205', border: '#7a5515' }
-      : { text: '🔒 PAPER ONLY', color: 'var(--red)', bg: '#150505', border: '#7a1515' }
+      ? { text: '⚠️ REAL UNLOCKED · DISARMED', color: 'var(--amber)', bg: '#fdf3e3', border: '#f0d9a8' }
+      : { text: '🔒 PAPER ONLY', color: 'var(--red)', bg: 'var(--bg-kill)', border: '#f3c4c4' }
   return (
     <Panel style={{ padding: '14px 18px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderColor: `${rank.color}55`, boxShadow: `0 0 16px ${rank.color}22` }}>
       <div>

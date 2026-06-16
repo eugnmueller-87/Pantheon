@@ -12,6 +12,8 @@ import { LiveView } from './views/LiveView'
 import { PantheonView } from './views/PantheonView'
 import { PortfolioView } from './views/PortfolioView'
 import { CostHealthView } from './views/CostHealthView'
+import { ClassicView } from './views/ClassicView'
+import { AgentsView } from './views/AgentsView'
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 30_000, refetchOnWindowFocus: false } },
@@ -21,7 +23,9 @@ const START_EQUITY = 4000 // matches settings.json starting_equity
 
 const TABS = [
   { id: 'live',      label: 'LIVE',      icon: '📡' },
+  { id: 'classic',   label: 'CLASSIC',   icon: '📊' },
   { id: 'pantheon',  label: 'PANTHEON',  icon: '🏛️' },
+  { id: 'agents',    label: 'AGENTS',    icon: '🤖' },
   { id: 'portfolio', label: 'PORTFOLIO', icon: '📈' },
   { id: 'cost',      label: 'COST & HEALTH', icon: '⚙️' },
 ]
@@ -35,7 +39,7 @@ export default function App() {
 }
 
 function Dashboard() {
-  const [tab, setTab] = useState('live')
+  const [tab, setTab] = useState('classic')
   const socket = usePipelineSocket()
   // Wake the Supabase realtime subscriptions (feeds the query cache used by
   // history/EXP panels). Must run inside QueryClientProvider.
@@ -78,15 +82,21 @@ function Dashboard() {
           style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}
         >
           {tab === 'live'      && <LiveView socket={socket} metrics={metrics} />}
+          {tab === 'classic'   && <ClassicView status={status} />}
           {tab === 'pantheon'  && <PantheonView />}
+          {tab === 'agents'    && (
+            <div className="classic-light c-scroll" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '18px 22px' }}>
+              <AgentsView />
+            </div>
+          )}
           {tab === 'portfolio' && <PortfolioView />}
           {tab === 'cost'      && <CostHealthView />}
         </motion.div>
       </AnimatePresence>
 
       <div style={{
-        textAlign: 'center', fontSize: 7, color: 'var(--border)', padding: '3px 0',
-        borderTop: '1px solid var(--panel)', letterSpacing: 2, flexShrink: 0,
+        textAlign: 'center', fontSize: 7, color: 'var(--text-ghost)', padding: '3px 0',
+        borderTop: '1px solid var(--border)', letterSpacing: 2, flexShrink: 0,
       }}>
         PANTHEON OS · ZEUS · ICARUS · ARES · ARGUS · ARTEMIS · PYTHIA · HADES · APOLLO  ·  Claude Haiku · ChromaDB · IBKR
       </div>

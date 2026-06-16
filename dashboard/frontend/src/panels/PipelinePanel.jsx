@@ -13,8 +13,8 @@ export function PipelinePanel({ activeStage, killStage, agentMap, status, style 
           const isActive = activeStage === ag.id
           const isKill   = killStage === ag.id
           const health   = agentMap[ag.id]
-          const border = isKill ? 'var(--red)' : isActive ? 'var(--blue)' : health === 'healthy' ? '#1a3a28' : health === 'failed' ? '#742a2a' : 'var(--border)'
-          const bg     = isKill ? 'var(--bg-kill)' : isActive ? '#071525' : 'var(--panel-2)'
+          const border = isKill ? 'var(--red)' : isActive ? 'var(--blue)' : health === 'healthy' ? '#bce3cb' : health === 'failed' ? '#f3c4c4' : 'var(--border)'
+          const bg     = isKill ? 'var(--bg-kill)' : isActive ? 'var(--bg-signal)' : 'var(--panel-2)'
           return (
             <React.Fragment key={ag.id}>
               <div style={{
@@ -25,7 +25,7 @@ export function PipelinePanel({ activeStage, killStage, agentMap, status, style 
               }}>
                 <span style={{ fontSize: 12, flexShrink: 0 }}>{ag.icon}</span>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: 0.5, color: isActive ? 'var(--blue)' : isKill ? 'var(--red)' : '#c0cce0' }}>{ag.label}</div>
+                  <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: 0.5, color: isActive ? 'var(--blue)' : isKill ? 'var(--red)' : 'var(--text)' }}>{ag.label}</div>
                   <div style={{ fontSize: 7, color: 'var(--text-ghost)', marginTop: 1 }}>{ag.sub}</div>
                 </div>
                 <div style={{ width: 5, height: 5, borderRadius: '50%', flexShrink: 0, background: health === 'healthy' ? 'var(--green)' : health === 'failed' ? 'var(--red)' : 'var(--text-mute)' }} />
@@ -40,7 +40,7 @@ export function PipelinePanel({ activeStage, killStage, agentMap, status, style 
 
       {/* Apollo — separate research agent */}
       <div style={{ borderTop: '1px dashed var(--border)', marginTop: 8, paddingTop: 8 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '7px 8px', borderRadius: 4, border: '1px solid #2d1f50', background: '#0d0a1e' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '7px 8px', borderRadius: 4, border: '1px solid #ddd0f3', background: '#f3eefc' }}>
           <span style={{ fontSize: 12 }}>📚</span>
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: 9, fontWeight: 700, color: 'var(--purple)' }}>APOLLO</div>

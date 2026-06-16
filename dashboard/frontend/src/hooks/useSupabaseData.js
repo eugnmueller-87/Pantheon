@@ -50,3 +50,24 @@ export const usePerformanceStats = () => {
   const d = useRpc('get_performance_stats')
   return Array.isArray(d) ? d[0] : d || null
 }
+
+// Open positions straight from portfolio_positions (the authoritative table) —
+// the live WebSocket status.positions is often empty, so the dashboard should
+// not depend on it. Polled every 30s.
+export const usePositions = () => useQuery({
+  queryKey: ['positions', 'open'],
+  enabled: Boolean(SB_URL && SB_KEY),
+  refetchInterval: 30_000,
+  queryFn: async () => {
+    const { createClient } = await import('@supabase/supabase-js')
+    const sb = createClient(SB_URL, SB_KEY)
+    const { data, error } = await sb
+      .from('portfolio_positions')
+      .select('symbol, side, qty, avg_cost, current_price, unrealized_pnl, unrealized_pnl_pct')
+      .is('closed_at', null)
+    if (error) throw error
+    return data || []
+  },
+  initialData: [],
+  staleTime: 15_000,
+}).data || []

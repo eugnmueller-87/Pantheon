@@ -11,10 +11,10 @@ export function EquityChartLW({ data }) {
     if (!ref.current) return
     const chart = createChart(ref.current, {
       autoSize: true,
-      layout: { background: { color: 'transparent' }, textColor: '#4a5568', fontFamily: "'Courier New', monospace" },
-      grid: { vertLines: { color: '#0f1420' }, horzLines: { color: '#0f1420' } },
-      rightPriceScale: { borderColor: '#1a2540' },
-      timeScale: { borderColor: '#1a2540', timeVisible: true },
+      layout: { background: { color: 'transparent' }, textColor: '#7a8194', fontFamily: "'Courier New', monospace" },
+      grid: { vertLines: { color: '#eef1f6' }, horzLines: { color: '#eef1f6' } },
+      rightPriceScale: { borderColor: '#e6e9f0' },
+      timeScale: { borderColor: '#e6e9f0', timeVisible: true },
       crosshair: { mode: 0 },
     })
     chartRef.current = chart

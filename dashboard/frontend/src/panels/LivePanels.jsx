@@ -182,7 +182,7 @@ export function ZeusReasoningPanel({ latestSignal, displayed, latestTrade, lates
           {latestSignal.tickers?.length > 0 && (
             <div style={{ display: 'flex', gap: 4, marginTop: 5, flexWrap: 'wrap' }}>
               {latestSignal.tickers.map(t => (
-                <span key={t} style={{ fontSize: 9, padding: '1px 5px', borderRadius: 3, background: '#071525', border: '1px solid #1a3a5a', color: 'var(--blue)' }}>{t}</span>
+                <span key={t} style={{ fontSize: 9, padding: '1px 5px', borderRadius: 3, background: 'var(--bg-signal)', border: '1px solid #bcd2f7', color: 'var(--blue)' }}>{t}</span>
               ))}
             </div>
           )}
