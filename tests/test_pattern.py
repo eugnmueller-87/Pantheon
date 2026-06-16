@@ -10,6 +10,7 @@ import sqlite3
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -78,7 +79,11 @@ class TestDefaultSizing:
         assert sized.position_size_pct == pytest.approx(0.02)
 
     def test_cold_start_uses_prior_confidence(self, pattern):
-        sized = pattern.size(_filtered(), _macro())
+        # Isolate the raw cold-start floor from the exploration layer (which has
+        # its own tests in test_pythia_exploration.py): with the budget at 0,
+        # no-history confidence stays at the 0.55 prior.
+        with patch("agents.pythia._EXPLORATION_TRADES", 0):
+            sized = pattern.size(_filtered(), _macro())
         assert sized.confidence == pytest.approx(0.55)
 
     def test_cold_start_not_skipped(self, pattern):
@@ -204,8 +209,10 @@ class TestSQLiteRoundTrip:
                 SizedSignal(original=f, macro=m, confidence=0.55, position_size_pct=0.02),
                 _result(f"open-{i}", pnl=None),  # still open
             )
-        # Should fall back to default (no closed trades counted)
-        sized = pattern.size(f, m)
+        # Should fall back to default (no closed trades counted). Disable the
+        # exploration bump so we're asserting the raw 0.55 prior, not 0.62.
+        with patch("agents.pythia._EXPLORATION_TRADES", 0):
+            sized = pattern.size(f, m)
         assert sized.confidence == pytest.approx(0.55)
 
     def test_db_schema_has_required_columns(self, pattern, tmp_db):

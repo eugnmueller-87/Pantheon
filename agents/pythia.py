@@ -33,6 +33,16 @@ _MIN_SAMPLES      = int(os.getenv("PYTHIA_MIN_SAMPLES", "10"))
 _DEFAULT_SIZE_PCT = float(os.getenv("PYTHIA_DEFAULT_SIZE_PCT", "0.02"))
 _MIN_CONFIDENCE   = float(os.getenv("PYTHIA_MIN_CONFIDENCE", "0.45"))
 
+# ── Cold-start exploration ────────────────────────────────────────────────────
+# The deadlock: with no closed trades, every signal hits stats=None → confidence
+# floors at 0.55 → ZEUS reads "no conviction" and vetoes → no trades close → stats
+# stays None forever. To break it, allow a BOUNDED number of paper-only seeding
+# trades at a confidence just above the floor so ZEUS will let them through and
+# Pythia gathers its first real hit-rate data. Self-terminates once the budget is
+# spent (or real history exists). Never fires with real money.
+_EXPLORATION_TRADES     = int(os.getenv("PYTHIA_EXPLORATION_TRADES", "20"))
+_EXPLORATION_CONFIDENCE = float(os.getenv("PYTHIA_EXPLORATION_CONFIDENCE", "0.62"))
+
 
 class PythiaAgent:
     def __init__(self, db_path: Path = DB_PATH, milestone_manager=None):
@@ -69,13 +79,25 @@ class PythiaAgent:
         key   = self._context_key(signal, macro)
         stats = self._lookup_stats(key)
 
+        is_exploration = False
         if stats is None:
-            # TODO(cold-start): no-history setups default to 0.55 = tier 2. Correct
-            # treatment is lowest-tier / min-size until ~10 trades close and Pythia's
-            # real win-rate takes over. Do NOT raise the default — that would encode
-            # "no evidence" as high conviction.
+            # No-history setups default to 0.55 = tier 2 (lowest-conviction, min
+            # size). Do NOT raise this default — that would encode "no evidence"
+            # as high conviction.
             confidence   = 0.55
             position_pct = _DEFAULT_SIZE_PCT
+            # Cold-start exploration: break the no-trades→no-data deadlock with a
+            # bounded number of PAPER-ONLY seeding trades at a confidence just
+            # above the floor, so ZEUS lets them through and Pythia gathers its
+            # first hit-rates. Self-terminates once the budget is spent. Gated
+            # hard on paper mode — never bumps confidence with real money.
+            if self._exploration_active():
+                confidence     = _EXPLORATION_CONFIDENCE
+                is_exploration = True
+                logger.info(
+                    "[PYTHIA] cold-start EXPLORATION (paper) key=%s conf=%.2f size=%.2f%% — seeding history",
+                    key, confidence, position_pct * 100,
+                )
         else:
             confidence   = stats["hit_rate"]
             edge         = max(0.0, confidence - 0.5) * 2
@@ -94,6 +116,7 @@ class PythiaAgent:
                     confidence=confidence, position_size_pct=0.0,
                     skip=True,
                     skip_reason=f"Stage {stage_cfg.stage.value}: tier {tier} not allowed (need {stage_cfg.allowed_tiers})",
+                    is_exploration=is_exploration,
                 )
 
         skip = confidence < _MIN_CONFIDENCE
@@ -104,7 +127,22 @@ class PythiaAgent:
             position_size_pct = position_pct,
             skip              = skip,
             skip_reason       = f"confidence {confidence:.2f} < threshold" if skip else None,
+            is_exploration    = is_exploration,
         )
+
+    def _exploration_active(self) -> bool:
+        """True iff cold-start exploration should fire for a no-history signal:
+        paper mode AND fewer closed trades than the exploration budget. Gated
+        hard on paper_trading so this can never bump confidence on real money."""
+        if _EXPLORATION_TRADES <= 0:
+            return False
+        try:
+            from config.settings import load_settings
+            if not load_settings().get("paper_trading", True):
+                return False  # real money — exploration disabled, full stop
+        except Exception:
+            return False      # can't confirm paper mode → fail safe (no bump)
+        return self._total_closed_trades() < _EXPLORATION_TRADES
 
     def record_trade(self, sized: SizedSignal, result: TradeResult) -> None:
         key    = self._context_key(sized.original, sized.macro)
@@ -182,6 +220,26 @@ class PythiaAgent:
         if row and row[0] >= _MIN_SAMPLES:
             return {"n": row[0], "hit_rate": row[1] if row[1] is not None else 0.5}
         return None
+
+    def _total_closed_trades(self) -> int:
+        """Count of all closed (outcome-known) trades — drives the exploration
+        budget. Best-effort: on any storage error, return a large number so we
+        do NOT keep exploring blindly when we can't confirm the count."""
+        try:
+            if self._use_supabase:
+                import core.supabase_client as supa
+                rows = supa.get_client().table("trades") \
+                    .select("trade_id", count="exact") \
+                    .not_.is_("hit", "null") \
+                    .execute()
+                return rows.count if rows.count is not None else len(rows.data or [])
+            with sqlite3.connect(self.db_path) as conn:
+                return conn.execute(
+                    "SELECT COUNT(*) FROM trades WHERE hit IS NOT NULL"
+                ).fetchone()[0]
+        except Exception as exc:
+            logger.warning("[PYTHIA] closed-trade count failed (%s) — pausing exploration", exc)
+            return _EXPLORATION_TRADES  # treat as budget-exhausted, fail safe
 
     # ── SQLite fallback ────────────────────────────────────────────────────────
 

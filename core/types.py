@@ -140,6 +140,10 @@ class SizedSignal:
     position_size_pct:  float            # % of portfolio to allocate
     skip:               bool             = False
     skip_reason:        Optional[str]    = None
+    # Cold-start seeding: a bounded, paper-only exploration trade taken to gather
+    # the first hit-rate data, NOT a genuine-conviction signal. ZEUS/traces use
+    # this to treat the confidence as "exploring" rather than real edge.
+    is_exploration:     bool             = False
 
     @property
     def signal_id(self) -> str:            return self.original.signal_id
