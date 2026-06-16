@@ -264,7 +264,24 @@ class KnowledgeBase:
             metas = results.get("metadatas", [])
             if not metas:
                 return {}
-            pnls = [m["pnl_pct"] for m in metas if m.get("pnl_pct") is not None]
+            # Closed directional outcomes only. Exclude pnl_pct that is None
+            # (open/unresolved) AND exactly 0.0 (flat/breakeven or a placeholder
+            # zero in the DB) — counting a flat trade in the denominator without
+            # ever crediting it as a win silently drags win_rate down as if it
+            # were a loss. ChromaDB may store the value as a string, so coerce
+            # defensively and skip anything non-numeric.
+            pnls = []
+            for m in metas:
+                raw = m.get("pnl_pct")
+                if raw is None:
+                    continue
+                try:
+                    val = float(raw)
+                except (TypeError, ValueError):
+                    continue
+                if val == 0.0:
+                    continue
+                pnls.append(val)
             wins = [p for p in pnls if p > 0]
             return {
                 "n": len(pnls),
