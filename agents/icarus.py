@@ -163,6 +163,14 @@ class _UpstashRedis:
     def get(self, key: str) -> str | None:
         return self._cmd("GET", key)
 
+    def set(self, key: str, value: str) -> None:
+        self._cmd("SET", key, value)
+
+    def delete(self, *keys: str) -> int:
+        if not keys:
+            return 0
+        return int(self._cmd("DEL", *keys))
+
 
 def _sanitize_signal_id(raw_id: str) -> str:
     """Ensure signal_id is a valid UUID — generate one if Hermes sends a truncated ID."""
@@ -267,11 +275,17 @@ def _map_signal(item: dict) -> Optional[RawSignal]:
 _SEEN_REDIS_KEY = "icarus:seen_signals"
 _SEEN_TTL_SECONDS = 7 * 24 * 3600  # matches _MAX_SIGNAL_AGE_HOURS
 
-# Quality learning — Redis keys
-# icarus:quality:{pattern}:seen   — how many times Icarus sent this pattern
-# icarus:quality:{pattern}:approved — how many times Zeus approved it
-_QUALITY_MIN_SAMPLES = 10    # need at least this many before filtering
-_QUALITY_MAX_REJECT  = 0.85  # suppress pattern if rejection rate >= 85%
+# Quality learning — TIME-WINDOWED Redis keys (was cumulative, never decayed —
+# a bad cold-start week permanently muted a pattern). Daily buckets each expire
+# after 14 days; should_suppress sums the trailing window.
+#   icarus:quality:{pattern}:seen:{YYYYMMDD}      (per-day counter, TTL 14d)
+#   icarus:quality:{pattern}:approved:{YYYYMMDD}  (per-day counter, TTL 14d)
+#   icarus:quality:{pattern}:released_at          (hysteresis release marker)
+_QUALITY_MIN_SAMPLES  = 10        # min samples in the window before filtering
+_QUALITY_MAX_REJECT   = 0.85      # suppress when rejection rate >= 85%
+_QUALITY_WINDOW_DAYS  = 14        # trailing window summed by should_suppress
+_QUALITY_MIN_BUCKETS  = 3         # require >=3 days with data (not one bad day)
+_QUALITY_BUCKET_TTL   = (_QUALITY_WINDOW_DAYS + 1) * 24 * 3600
 
 
 def _quality_pattern(sig: "RawSignal") -> str:
@@ -292,42 +306,73 @@ class _SignalQualityFilter:
     before they burn an LLM call. Stats persist in Redis (same Upstash instance).
 
     Pattern key = hermes_signal_type + first meaningful headline keyword.
-    A pattern is suppressed once it has >=10 samples with >=85% rejection rate.
+    Counters are TIME-WINDOWED (daily buckets, 14-day TTL): a pattern is
+    suppressed only when the trailing window has >=10 samples across >=3 days
+    AND a >=85% rejection rate. Without windowing a bad cold-start week muted a
+    pattern forever; fixing the upstream bugs couldn't un-mute it.
     """
 
     def __init__(self, redis: _UpstashRedis | None):
         self._redis = redis
 
+    @staticmethod
+    def _day_keys() -> list[str]:
+        """YYYYMMDD strings for the trailing window, newest first."""
+        from datetime import datetime, timedelta, timezone
+        today = datetime.now(timezone.utc).date()
+        return [(today - timedelta(days=i)).strftime("%Y%m%d")
+                for i in range(_QUALITY_WINDOW_DAYS)]
+
+    def _window_totals(self, pattern: str) -> tuple[int, int, int]:
+        """(seen, approved, buckets_with_data) summed over the trailing window."""
+        seen = approved = buckets = 0
+        for day in self._day_keys():
+            s_raw = self._redis.get(f"icarus:quality:{pattern}:seen:{day}")
+            if not s_raw:
+                continue
+            s = int(s_raw)
+            a_raw = self._redis.get(f"icarus:quality:{pattern}:approved:{day}")
+            seen += s
+            approved += int(a_raw) if a_raw else 0
+            buckets += 1
+        return seen, approved, buckets
+
     def should_suppress(self, sig: "RawSignal") -> bool:
-        """Return True if this pattern is reliably rejected by Zeus."""
+        """Return True if this pattern is reliably rejected by Zeus in the window."""
         if self._redis is None:
             return False
         pattern = _quality_pattern(sig)
         try:
-            seen_raw     = self._redis.get(f"icarus:quality:{pattern}:seen")
-            approved_raw = self._redis.get(f"icarus:quality:{pattern}:approved")
-            seen     = int(seen_raw)     if seen_raw     else 0
-            approved = int(approved_raw) if approved_raw else 0
-            if seen < _QUALITY_MIN_SAMPLES:
-                return False
+            seen, approved, buckets = self._window_totals(pattern)
+            if seen < _QUALITY_MIN_SAMPLES or buckets < _QUALITY_MIN_BUCKETS:
+                return False  # not enough evidence / one bad day isn't enough
             rejection_rate = (seen - approved) / seen
             if rejection_rate >= _QUALITY_MAX_REJECT:
                 logger.info(
                     "[ICARUS] Suppressing low-quality pattern '%s' "
-                    "(rejection rate %.0f%% over %d samples)",
-                    pattern, rejection_rate * 100, seen,
+                    "(rejection %.0f%% over %d samples / %d days)",
+                    pattern, rejection_rate * 100, seen, buckets,
                 )
                 return True
         except Exception:
             pass
         return False
 
+    def _incr_bucket(self, key: str) -> None:
+        # INCR creates the key; set TTL so daily buckets self-expire after 14d.
+        self._redis.incr(key)
+        try:
+            self._redis.expire(key, _QUALITY_BUCKET_TTL)
+        except Exception:
+            pass
+
     def record_seen(self, sig: "RawSignal") -> None:
         if self._redis is None:
             return
         pattern = _quality_pattern(sig)
+        day = self._day_keys()[0]
         try:
-            self._redis.incr(f"icarus:quality:{pattern}:seen")
+            self._incr_bucket(f"icarus:quality:{pattern}:seen:{day}")
             self._redis.incr("icarus:quality:totals:seen")
         except Exception:
             pass
@@ -336,11 +381,27 @@ class _SignalQualityFilter:
         if self._redis is None:
             return
         pattern = _quality_pattern(sig)
+        day = self._day_keys()[0]
         try:
-            self._redis.incr(f"icarus:quality:{pattern}:approved")
+            self._incr_bucket(f"icarus:quality:{pattern}:approved:{day}")
             self._redis.incr("icarus:quality:totals:approved")
         except Exception:
             pass
+
+    def reset(self, pattern: str) -> int:
+        """Clear all seen/approved buckets for a pattern (operator override).
+        Returns the number of keys deleted."""
+        if self._redis is None:
+            return 0
+        keys = []
+        for day in self._day_keys():
+            keys.append(f"icarus:quality:{pattern}:seen:{day}")
+            keys.append(f"icarus:quality:{pattern}:approved:{day}")
+        keys.append(f"icarus:quality:{pattern}:released_at")
+        try:
+            return self._redis.delete(*keys)
+        except Exception:
+            return 0
 
 
 class IcarusAgent:
@@ -356,6 +417,7 @@ class IcarusAgent:
         self._redis = self._init_redis()
         self._quality = _SignalQualityFilter(self._redis)
         self.kb = AgentKnowledgeBase("icarus")
+        # (reset_quality_filter is defined as a method below)
         # Optional callable(supplier_name) -> ticker | None injected by Zeus
         # Falls back to the static _resolve_ticker when not provided
         self._ticker_resolver = ticker_resolver or _resolve_ticker
@@ -395,6 +457,13 @@ class IcarusAgent:
     @property
     def _headers(self) -> dict:
         return {"x-api-key": self._api_key}
+
+    def reset_quality_filter(self, pattern: str) -> int:
+        """Operator override: clear a single suppressed quality pattern's state
+        (e.g. a pattern muted during the cold-start window). Returns keys deleted."""
+        n = self._quality.reset(pattern)
+        logger.info("[ICARUS] quality filter reset for '%s' (%d keys)", pattern, n)
+        return n
 
     def health(self) -> AgentHealth:
         """Healthy when Supabase is reachable (Hermes Railway is retired)."""
