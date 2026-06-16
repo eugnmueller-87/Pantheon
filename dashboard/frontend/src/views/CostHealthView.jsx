@@ -9,6 +9,22 @@ import { useLlmUsage, useAgentHealthDb } from '../hooks/useSupabaseData'
 
 const DAILY_BUDGET_USD = 25 // matches the Grafana budget gauge
 
+// Custom tooltip that reads the hovered datum directly — recharts' default
+// tooltip on a vertical single-series bar with per-Cell colors could show the
+// wrong row's label (the director bar showed "bear"). Reading payload[0].payload
+// guarantees the label/value match the bar under the cursor.
+function RoleTooltip({ active, payload }) {
+  if (!active || !payload?.length) return null
+  const d = payload[0].payload
+  return (
+    <div style={{ background: 'var(--panel)', border: '1px solid var(--border)', fontSize: 9, padding: '6px 8px', borderRadius: 4 }}>
+      <div style={{ fontWeight: 700, color: 'var(--text)' }}>{d.name}</div>
+      <div style={{ color: 'var(--text-dim)' }}>cost: ${Number(d.cost).toFixed(4)}</div>
+      <div style={{ color: 'var(--text-faint)' }}>{d.calls} calls · {(d.inTok / 1000).toFixed(0)}k in · {(d.outTok / 1000).toFixed(0)}k out</div>
+    </div>
+  )
+}
+
 export function CostHealthView() {
   const usage = useLlmUsage()
   const health = useAgentHealthDb()
@@ -108,8 +124,7 @@ export function CostHealthView() {
               <BarChart data={byRole} layout="vertical" margin={{ top: 4, right: 14, bottom: 0, left: 10 }}>
                 <XAxis type="number" tick={{ fontSize: 7, fill: 'var(--text-ghost)' }} axisLine={false} tickLine={false} tickFormatter={v => `$${v}`} />
                 <YAxis type="category" dataKey="name" tick={{ fontSize: 8, fill: 'var(--text-faint)' }} axisLine={false} tickLine={false} width={120} />
-                <Tooltip contentStyle={{ background: 'var(--panel)', border: '1px solid var(--border)', fontSize: 9 }}
-                  formatter={(v) => [`$${v}`, 'cost']} />
+                <Tooltip cursor={{ fill: 'var(--panel-2)' }} content={<RoleTooltip />} />
                 <Bar dataKey="cost" radius={[0, 3, 3, 0]}>
                   {byRole.map((r, i) => <Cell key={i} fill={ROLE_COLOR[r.role] || ALLOC_COLORS[i % ALLOC_COLORS.length]} />)}
                 </Bar>

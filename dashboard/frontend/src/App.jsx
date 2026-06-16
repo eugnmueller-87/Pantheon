@@ -1,12 +1,13 @@
 // Thin shell: providers → socket → computed metrics → TopBar/TabBar → animated
 // tab views. The 663-line monolith was decomposed into lib/hooks/components/
 // panels/views (Phase 1 of the dashboard plan).
-import { useState, useMemo } from 'react'
+import { useState } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AnimatePresence, motion } from 'framer-motion'
 import './theme/tokens.css'
 import { usePipelineSocket } from './hooks/usePipelineSocket'
 import { useSupabaseRealtime } from './hooks/useSupabaseRealtime'
+import { useMetrics } from './hooks/useMetrics'
 import { TopBar, TabBar } from './panels/TopBar'
 import { LiveView } from './views/LiveView'
 import { PantheonView } from './views/PantheonView'
@@ -18,8 +19,6 @@ import { AgentsView } from './views/AgentsView'
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 30_000, refetchOnWindowFocus: false } },
 })
-
-const START_EQUITY = 4000 // matches settings.json starting_equity
 
 const TABS = [
   { id: 'live',      label: 'LIVE',      icon: '📡' },
@@ -44,25 +43,12 @@ function Dashboard() {
   // Wake the Supabase realtime subscriptions (feeds the query cache used by
   // history/EXP panels). Must run inside QueryClientProvider.
   useSupabaseRealtime()
-  const { status, connected, send, signalEvents, tradeEvents, killEvents } = socket
+  const { status, connected, send } = socket
 
-  const metrics = useMemo(() => {
-    const drawdown = status?.drawdown_pct ?? 0
-    const ddColor = drawdown < 3 ? 'var(--green)' : drawdown < 6 ? 'var(--yellow)' : 'var(--red)'
-    const equity = Number(status?.equity ?? START_EQUITY)
-    const pnlPct = (equity - START_EQUITY) / START_EQUITY * 100
-    const totalSig = tradeEvents.length + killEvents.length
-    return {
-      drawdown, ddColor, equity,
-      pnlPct, pnlColor: pnlPct >= 0 ? 'var(--green)' : 'var(--red)',
-      pipeStatus: status?.pipeline_status || 'UNKNOWN',
-      signalCount: signalEvents.length,
-      tradeCount: tradeEvents.length,
-      killCount: killEvents.length,
-      approvalPct: totalSig > 0 ? tradeEvents.length / totalSig * 100 : 0,
-      killPct: totalSig > 0 ? killEvents.length / totalSig * 100 : 0,
-    }
-  }, [status, signalEvents, tradeEvents, killEvents])
+  // Single source of truth — every tab reads these SAME numbers (from Supabase,
+  // with the live WS status as the freshest equity/drawdown override). Replaces
+  // the old WS-session-only derivation that disagreed with the Supabase tabs.
+  const metrics = useMetrics(status)
 
   return (
     <div style={{
@@ -82,14 +68,14 @@ function Dashboard() {
           style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}
         >
           {tab === 'live'      && <LiveView socket={socket} metrics={metrics} />}
-          {tab === 'classic'   && <ClassicView status={status} />}
+          {tab === 'classic'   && <ClassicView status={status} metrics={metrics} />}
           {tab === 'pantheon'  && <PantheonView />}
           {tab === 'agents'    && (
             <div className="classic-light c-scroll" style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '18px 22px' }}>
               <AgentsView />
             </div>
           )}
-          {tab === 'portfolio' && <PortfolioView />}
+          {tab === 'portfolio' && <PortfolioView metrics={metrics} />}
           {tab === 'cost'      && <CostHealthView />}
         </motion.div>
       </AnimatePresence>

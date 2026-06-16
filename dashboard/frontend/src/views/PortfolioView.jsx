@@ -15,14 +15,17 @@ function Stat({ label, value, color }) {
   )
 }
 
-export function PortfolioView() {
+export function PortfolioView({ metrics }) {
   const equity = useEquitySeries()
   const trades = useTrades()
   const rmult  = useRMultiples()
   const perf   = usePerformanceStats()
 
   const closed = (trades || []).filter(t => t.hit !== null && t.hit !== undefined).slice(0, 30)
-  const winRate = perf ? Math.round((perf.win_rate || 0) * 100) : 0
+  // Win-rate from the shared metrics (same closed-trade basis as every other
+  // tab) — NOT the RPC, which could disagree. profit_factor / expectancy stay
+  // from the RPC since they're not in the shared hook.
+  const winRate = Math.round(metrics?.winRate ?? 0)
   const pf = perf ? (perf.profit_factor || 0) : 0
   const exp = perf ? (perf.expectancy || 0) : 0
 

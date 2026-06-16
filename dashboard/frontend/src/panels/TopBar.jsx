@@ -3,7 +3,7 @@
 import { Button } from '../components/ui/Button'
 
 export function TopBar({ status, connected, metrics, send }) {
-  const { equity, pnlPct, pnlColor, drawdown, ddColor, pipeStatus, signalCount, tradeCount, killCount } = metrics
+  const { equity, pnlPct, pnlColor, drawdown, ddColor, pipeStatus, signalCount, totalTrades, killCount, openCount } = metrics
   return (
     <div style={{
       display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -31,9 +31,9 @@ export function TopBar({ status, connected, metrics, send }) {
           { label: 'EQUITY',    value: `€${equity.toLocaleString('de-DE')}`, color: 'var(--text)' },
           { label: 'P&L',       value: `${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%`, color: pnlColor },
           { label: 'DRAWDOWN',  value: `${drawdown.toFixed(2)}%`, color: ddColor },
-          { label: 'POSITIONS', value: status?.open_positions ?? '—', color: 'var(--blue)' },
+          { label: 'POSITIONS', value: openCount, color: 'var(--blue)' },
           { label: 'SIGNALS',   value: signalCount, color: 'var(--purple)' },
-          { label: 'TRADES',    value: tradeCount, color: 'var(--green)' },
+          { label: 'TRADES',    value: totalTrades, color: 'var(--green)' },
           { label: 'KILLS',     value: killCount, color: 'var(--red)' },
           { label: 'STATUS',    value: pipeStatus, color: pipeStatus === 'RUNNING' ? 'var(--green)' : 'var(--red)' },
         ].map(({ label, value, color }) => (

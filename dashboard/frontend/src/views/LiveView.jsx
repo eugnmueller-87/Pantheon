@@ -11,17 +11,18 @@ import {
 } from '../panels/LivePanels'
 import { useLiveData } from '../hooks/useLiveData'
 
-export function LiveView({ socket }) {
+export function LiveView({ socket, metrics }) {
   const live = useLiveData(socket?.status)
   const {
     status, activeStage, killStage, agentMap, displayed,
     chartData, signalTypeCounts, killStageCounts,
     signalEvents, tradeEvents, killEvents, visibleEvents,
     latestSignal, latestTrade, latestKill,
-    equity, pnlPct, drawdown, approvalPct, killPct,
   } = live
-  const pnlColor = pnlPct >= 0 ? 'var(--green)' : 'var(--red)'
-  const ddColor = drawdown > 6 ? 'var(--red)' : drawdown > 3 ? 'var(--yellow)' : 'var(--green)'
+  // Shared portfolio numbers come from useMetrics (single source of truth) so the
+  // LIVE tab shows the SAME equity/P&L/drawdown/rates as every other tab. The
+  // signal/kill/trade FEED stays from useLiveData (LIVE-tab-specific detail).
+  const { equity, pnlPct, pnlColor, drawdown, ddColor, approvalPct, killPct } = metrics
 
   return (
     <div style={{

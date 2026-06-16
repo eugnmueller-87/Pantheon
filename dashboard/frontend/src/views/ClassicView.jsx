@@ -11,7 +11,7 @@ import '../theme/classic-light.css'
 import { Card, KpiTile, Sidebar } from '../components/classic/ClassicUI'
 import { AgentsView } from './AgentsView'
 import { LogsView } from './LogsView'
-import { useTrades, useEquitySeries, usePerformanceStats, usePositions } from '../hooks/useSupabaseData'
+import { useTrades, useEquitySeries, usePositions } from '../hooks/useSupabaseData'
 
 const eur = (n, d = 2) =>
   `€${Number(n || 0).toLocaleString('de-DE', { minimumFractionDigits: d, maximumFractionDigits: d })}`
@@ -19,17 +19,19 @@ const eur = (n, d = 2) =>
 const PIE = i => `var(--c-pie-${i % 12})`
 
 // ── Derived data from real Supabase rows ──────────────────────────────────────
-function useClassicData(status) {
+// Shared metrics (equity, profit, unrealized, win-rate, estimated flag) come
+// from the single useMetrics() source so this tab CANNOT disagree with the
+// others. Only view-specific shapes (equity area, pie, performers, feed,
+// most-traded) are computed locally here.
+function useClassicData(metrics) {
   const trades = useTrades()
   const equity = useEquitySeries()
-  const perf = usePerformanceStats()
   const dbPositions = usePositions()
 
   return useMemo(() => {
-    const eqVal = Number(status?.equity ?? 0)
-    // Prefer the live WebSocket positions; fall back to the DB table (the live
-    // payload is usually empty, but portfolio_positions always has the truth).
-    const positions = (status?.positions?.length ? status.positions : dbPositions) || []
+    const m = metrics
+    const eqVal = m.equity
+    const positions = m.openPositions
 
     // Equity area + per-snapshot delta bars (Balance line / Income bars in ref).
     const series = (equity || []).slice(-60).map(r => ({
@@ -41,41 +43,15 @@ function useClassicData(status) {
       income: i === 0 ? 0 : +(p.balance - series[i - 1].balance).toFixed(2),
     }))
 
-    // Realized € for ONE closed trade = pnl_pct × position notional (qty × entry
-    // price) — NOT pnl_pct × total equity. Multiplying by the whole €4000 book
-    // inflated every figure 4-30× (a -3% loss on a 1% position showed as -€120
-    // instead of ~-€4). Falls back to position_pct × equity only when qty/fill
-    // are missing, so a row without execution detail still estimates sanely.
-    const tradeEur = (t) => {
-      if (t.pnl_pct == null) return 0
-      const qty = Number(t.qty ?? 0), fill = Number(t.fill_price ?? 0)
-      if (qty && fill) return t.pnl_pct * qty * fill
-      const posPct = Number(t.position_pct ?? 0)
-      return posPct ? t.pnl_pct * posPct * eqVal : 0
-    }
+    // Shared realized-€ figures (one formula, one source — see useMetrics).
+    const profitToday = m.realizedToday
+    const profit7d = m.realized7d
+    const pct7d = eqVal ? (profit7d / eqVal) * 100 : 0
+    const unrealized = m.unrealized
 
-    // Today's realized P&L + trade count from CLOSED trades recorded today.
+    // Most traded symbol today (view-specific).
     const today = new Date().toISOString().slice(0, 10)
     const todays = (trades || []).filter(t => (t.recorded_at || '').slice(0, 10) === today)
-    const profitToday = todays
-      .filter(t => t.hit != null)
-      .reduce((s, t) => s + tradeEur(t), 0)
-
-    // Profit last 7 days — realized € from CLOSED trades in the window, same
-    // source/formula as Top Performers so the panels reconcile. (The equity
-    // series stays the Balance line; it doesn't move on backfilled closes, so
-    // deriving realized P&L from it would contradict the trade panels.)
-    const weekAgo = new Date(Date.now() - 7 * 864e5).toISOString().slice(0, 10)
-    const closedWk = (trades || []).filter(
-      t => t.hit != null && (t.closed_at || t.recorded_at || '').slice(0, 10) >= weekAgo,
-    )
-    const profit7d = closedWk.reduce((s, t) => s + tradeEur(t), 0)
-    const pct7d = eqVal ? (profit7d / eqVal) * 100 : 0
-
-    // Unrealized P&L from open positions (live socket or DB fallback).
-    const unrealized = positions.reduce((s, p) => s + Number(p.unrealized_pnl ?? 0), 0)
-
-    // Most traded symbol today.
     const symCount = {}
     todays.forEach(t => { symCount[t.symbol] = (symCount[t.symbol] || 0) + 1 })
     const mostTraded = Object.entries(symCount).sort((a, b) => b[1] - a[1])[0]?.[0] || '—'
@@ -90,11 +66,9 @@ function useClassicData(status) {
       .filter(p => p.value > 0)
       .sort((a, b) => b.value - a.value)
 
-    // Top performers — closed trades ranked by realized € (qty × fill × pnl_pct,
-    // via tradeEur — same source as profitToday/profit7d so the panels agree).
-    const closed = (trades || []).filter(t => t.hit != null && t.pnl_pct != null)
+    // Top performers — same closed set + same € formula (m.tradeEur) as the KPIs.
     const bySym = {}
-    closed.forEach(t => { bySym[t.symbol] = (bySym[t.symbol] || 0) + tradeEur(t) })
+    m.closed.forEach(t => { bySym[t.symbol] = (bySym[t.symbol] || 0) + m.tradeEur(t) })
     const performers = Object.entries(bySym)
       .map(([name, pnl]) => ({ name, pnl: +pnl.toFixed(2) }))
       .sort((a, b) => b.pnl - a.pnl)
@@ -108,14 +82,7 @@ function useClassicData(status) {
       open: t.hit == null,
     }))
 
-    // "Estimated" flag: realized P&L exists from closed trades, but the equity
-    // curve never moved (balance == start). That's the backlog we closed at
-    // estimated stop_loss prices — written to `trades` but never flowed through
-    // the equity engine, so Balance stays real (€4000) while profit shows a
-    // loss. Surface a badge so the two numbers don't read as a contradiction.
-    const realizedNonZero = closed.length > 0 && Math.abs(profit7d) > 0.005
-    const equityFlat = withIncome.length > 0 && Math.abs(withIncome[withIncome.length - 1].balance - withIncome[0].balance) < 0.005
-    const profitIsEstimated = realizedNonZero && equityFlat
+    const profitIsEstimated = m.profitIsEstimated
 
     return {
       eqVal, withIncome, profitToday, profit7d, pct7d, unrealized,
@@ -123,7 +90,7 @@ function useClassicData(status) {
       totalTrades: perf?.total_trades ?? (trades || []).length,
       profitIsEstimated,
     }
-  }, [trades, equity, perf, status, dbPositions])
+  }, [trades, equity, dbPositions, metrics])
 }
 
 function ChartTooltip({ active, payload, label }) {
@@ -282,9 +249,9 @@ const NAV = [
   { id: 'logs',      label: 'Logs',          icon: '📜' }, // ← which stock the pipeline tried
 ]
 
-export function ClassicView({ status }) {
+export function ClassicView({ status, metrics }) {
   const [page, setPage] = useState('dashboard')
-  const d = useClassicData(status)
+  const d = useClassicData(metrics)
   const trades = useTrades()
 
   const lastUpdate = status?.timestamp
