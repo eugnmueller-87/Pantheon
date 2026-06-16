@@ -757,7 +757,7 @@ class ZeusOrchestrator:
                 max_tokens=1500,
                 messages=[{"role": "user", "content": prompt}],
             )
-            self._record_token_usage(response.usage, sized.affected_tickers[0] if sized.affected_tickers else "unknown")
+            self._record_token_usage(response.usage, sized.affected_tickers[0] if sized.affected_tickers else "unknown", role="director")
             approved, reasoning, override_size = self._parse_llm_response(
                 response.content[0].text.strip(), sized
             )
@@ -807,7 +807,7 @@ class ZeusOrchestrator:
                 max_tokens=self.config.debate_max_tokens,
                 messages=[{"role": "user", "content": bull_prompt}],
             )
-            self._record_token_usage(bull_resp.usage, f"{ticker}:bull")
+            self._record_token_usage(bull_resp.usage, f"{ticker}:bull", role="bull")
             bull_case = bull_resp.content[0].text.strip()
         except Exception as exc:
             logger.warning("[ZEUS] Bull debate call failed: %s — proceeding without it.", exc)
@@ -822,7 +822,7 @@ class ZeusOrchestrator:
                 max_tokens=self.config.debate_max_tokens,
                 messages=[{"role": "user", "content": bear_prompt}],
             )
-            self._record_token_usage(bear_resp.usage, f"{ticker}:bear")
+            self._record_token_usage(bear_resp.usage, f"{ticker}:bear", role="bear")
             bear_case = bear_resp.content[0].text.strip()
         except Exception as exc:
             logger.warning("[ZEUS] Bear debate call failed: %s — using bull case only.", exc)
@@ -883,19 +883,24 @@ KNOWLEDGE BASE & PRECEDENT
 {opponent_block}
 Write 3-5 tight sentences. No preamble, no JSON — just your argument."""
 
-    def _record_token_usage(self, usage, symbol: str) -> None:
+    def _record_token_usage(self, usage, symbol: str, role: str = "director") -> None:
         # Sonnet 4.6 pricing: $3/MTok input, $15/MTok output
         input_tok  = getattr(usage, "input_tokens", 0) or 0
         output_tok = getattr(usage, "output_tokens", 0) or 0
         cost_usd   = round((input_tok * 3 + output_tok * 15) / 1_000_000, 6)
-        logger.info("[ZEUS] LLM tokens — in=%d out=%d cost=$%.4f symbol=%s",
-                    input_tok, output_tok, cost_usd, symbol)
+        logger.info("[ZEUS] LLM tokens — in=%d out=%d cost=$%.4f role=%s symbol=%s",
+                    input_tok, output_tok, cost_usd, role, symbol)
         try:
             from datetime import datetime, timezone
 
             import core.supabase_client as supa
+            # agent/role are explicit columns now (not parsed from `symbol`) so the
+            # dashboard's per-agent token panel reads them directly. ZEUS is the
+            # only LLM caller today; `agent` lets other agents attribute spend later.
             supa.get_client().table("llm_usage").insert({
                 "model":       self.config.anthropic_model_director,
+                "agent":       "zeus",
+                "role":        role,
                 "symbol":      symbol,
                 "input_tokens":  input_tok,
                 "output_tokens": output_tok,
