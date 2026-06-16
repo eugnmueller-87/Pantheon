@@ -143,10 +143,13 @@ jobs:
 
       - name: Deploy to Cloudflare Pages
         if: ${{ vars.CLOUDFLARE_READY == 'true' }}
-        uses: cloudflare/pages-action@v1
+        uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          projectName: pantheon-dashboard
-          directory: dashboard/frontend/dist
-          gitHubToken: ${{ secrets.GITHUB_TOKEN }}
+          # wrangler pages deploy — the supported successor to the deprecated
+          # cloudflare/pages-action@v1, which also tried to create a GitHub
+          # Deployment via gitHubToken and failed with "Resource not accessible
+          # by integration" (the default GITHUB_TOKEN lacks deployments:write).
+          # wrangler-action skips that integration entirely.
+          command: pages deploy dashboard/frontend/dist --project-name=pantheon-dashboard --branch=main
