@@ -493,8 +493,8 @@ class TestArgusOutcomeResolverWiring:
 
     def test_resolve_closed_outcomes_never_propagates(self):
         """A failure in outcome resolution must not break the portfolio tick."""
-        from agents.argus import ArgusAgent
         import agents.argus as argus_mod
+        from agents.argus import ArgusAgent
         argus = ArgusAgent()  # not mock
         # Force the Supabase gate on, then make fetch_open_trades blow up.
         with patch.object(argus_mod, "_USE_SUPABASE", True), \

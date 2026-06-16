@@ -89,8 +89,9 @@ class TestBudgetCap:
 
 class TestBudgetEquitySource:
     def _zeus_with_argus_equity(self, live_equity):
-        from agents.zeus import ZeusOrchestrator
         import os
+
+        from agents.zeus import ZeusOrchestrator
         os.environ["ZEUS_SKIP_MODEL_CHECK"] = "1"
         cfg = ZeusConfig(default_account_equity=4000.0, mock_execution=True)
         with patch("agents.zeus.KnowledgeBase"), patch("agents.zeus.CircuitBreaker"), \
