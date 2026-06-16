@@ -111,6 +111,16 @@ services:
     environment:
       - TZ=Europe/Berlin
       - HERMES_LOCAL_INTERVAL=1800
+    # The shared image's Dockerfile HEALTHCHECK curls localhost:8080/health, but
+    # this is a sleep-loop batch job with no web server — so it was always marked
+    # "unhealthy" (false alarm) and risked needless autoheal restarts. Override
+    # with a process-liveness check instead.
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f run_hermes_producer.py || exit 1"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     networks:
       - pantheon
 
