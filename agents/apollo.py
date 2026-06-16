@@ -641,13 +641,27 @@ class ApolloAgent:
         approved_count = 0
 
         for m in metas:
-            pnl    = m.get("pnl_pct", 0.0) or 0.0
             cat    = m.get("category", "unknown")
             regime = m.get("regime", "unknown")
-            if m.get("approved") is True or m.get("approved") == "True":
-                approved_count += 1
-                by_category[cat].append(pnl)
-                by_regime[regime].append(pnl)
+            if not (m.get("approved") is True or m.get("approved") == "True"):
+                continue
+            approved_count += 1
+            # Only CLOSED directional outcomes feed the win-rate lines written
+            # into zeus_skills.md (ZEUS reads that file every cycle). Open trades
+            # (pnl_pct None) and flat 0.0 must not count as non-winners — the old
+            # `m.get("pnl_pct", 0.0) or 0.0` bucketed both as 0.0, dragging the
+            # reported win rate down. Mirror the KB query filter (Section 1).
+            raw = m.get("pnl_pct")
+            if raw is None:
+                continue
+            try:
+                pnl = float(raw)
+            except (TypeError, ValueError):
+                continue
+            if pnl == 0.0:
+                continue
+            by_category[cat].append(pnl)
+            by_regime[regime].append(pnl)
 
         if approved_count < 5:
             return None
