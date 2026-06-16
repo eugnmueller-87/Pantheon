@@ -141,6 +141,102 @@ class TestOutcomeResolver:
         result = resolver.resolve_closed("ord-1", exit_price=100.0, side="BUY")
         assert result is None
 
+    def test_resolve_closed_explicit_fill_price_no_tracking(self):
+        """fill_price can be passed directly — works without track_open (restart-safe)."""
+        resolver = OutcomeResolver()  # empty _open_orders
+        with patch("core.shadow_learning.OutcomeResolver._backfill_supabase"):
+            pnl = resolver.resolve_closed("ord-x", exit_price=110.0, side="BUY", fill_price=100.0)
+        assert pnl == pytest.approx(0.10, rel=0.01)
+
+
+# ── DB-driven (restart-safe) resolution ───────────────────────────────────────
+
+def _open_row(order_id, symbol, fill_price, qty=1, side="BUY",
+              stop_loss=None, recorded_at="2026-06-15T10:00:00+00:00"):
+    return {
+        "order_id": order_id, "symbol": symbol, "side": side,
+        "fill_price": fill_price, "qty": qty, "stop_loss": stop_loss,
+        "take_profit": None, "recorded_at": recorded_at,
+    }
+
+
+class TestDbDrivenResolution:
+    def test_closed_symbol_resolves_via_fill(self):
+        resolver = OutcomeResolver()
+        rows  = [_open_row("ord-1", "NVDA", 100.0)]
+        fills = {"NVDA": [{"price": 104.0, "qty": 1, "time": "2026-06-15T12:00:00+00:00"}]}
+        with patch("core.shadow_learning.OutcomeResolver._backfill_supabase"):
+            resolved = resolver.resolve_from_db_and_portfolio(
+                rows, open_symbols=set(), closing_fills=fills,
+            )
+        assert resolved == [pytest.approx(0.04, rel=0.01)]
+
+    def test_still_open_symbol_skipped(self):
+        resolver = OutcomeResolver()
+        rows = [_open_row("ord-1", "NVDA", 100.0)]
+        with patch("core.shadow_learning.OutcomeResolver._backfill_supabase"):
+            resolved = resolver.resolve_from_db_and_portfolio(
+                rows, open_symbols={"NVDA"}, closing_fills={},
+            )
+        assert resolved == []
+
+    def test_two_same_symbol_rows_resolve_fifo(self):
+        resolver = OutcomeResolver()
+        rows = [
+            _open_row("ord-old", "NVDA", 100.0, recorded_at="2026-06-15T09:00:00+00:00"),
+            _open_row("ord-new", "NVDA", 100.0, recorded_at="2026-06-15T11:00:00+00:00"),
+        ]
+        fills = {"NVDA": [
+            {"price": 110.0, "qty": 1, "time": "2026-06-15T12:00:00+00:00"},  # first → oldest row
+            {"price": 90.0,  "qty": 1, "time": "2026-06-15T13:00:00+00:00"},  # second → newest row
+        ]}
+        with patch("core.shadow_learning.OutcomeResolver._backfill_supabase"):
+            resolved = resolver.resolve_from_db_and_portfolio(
+                rows, open_symbols=set(), closing_fills=fills,
+            )
+        # Oldest row consumed the +10% fill, newest the -10% fill (FIFO).
+        assert resolved == [pytest.approx(0.10, rel=0.01), pytest.approx(-0.10, rel=0.01)]
+
+    def test_approximate_disabled_leaves_trade_open(self):
+        resolver = OutcomeResolver()
+        rows = [_open_row("ord-1", "NVDA", 100.0, stop_loss=97.0)]
+        with patch.object(resolver, "resolve_closed") as spy:
+            resolved = resolver.resolve_from_db_and_portfolio(
+                rows, open_symbols=set(), closing_fills={}, allow_approximate=False,
+            )
+        assert resolved == []
+        spy.assert_not_called()
+
+    def test_approximate_stop_loss_fallback(self):
+        resolver = OutcomeResolver()
+        rows = [_open_row("ord-1", "NVDA", 100.0, stop_loss=97.0)]
+        with patch("core.shadow_learning.OutcomeResolver._backfill_supabase"):
+            resolved = resolver.resolve_from_db_and_portfolio(
+                rows, open_symbols=set(), closing_fills={}, allow_approximate=True,
+            )
+        assert resolved == [pytest.approx(-0.03, rel=0.01)]  # closed at stop → loss
+
+    def test_no_fill_price_row_skipped(self):
+        resolver = OutcomeResolver()
+        rows = [_open_row("ord-junk", "TSLA", None)]
+        with patch("core.shadow_learning.OutcomeResolver._backfill_supabase"):
+            resolved = resolver.resolve_from_db_and_portfolio(
+                rows, open_symbols=set(), closing_fills={"TSLA": [{"price": 1, "qty": 1, "time": "x"}]},
+            )
+        assert resolved == []
+
+    def test_restart_safe_empty_tracking(self):
+        """Fresh resolver (empty _open_orders) still resolves DB rows."""
+        resolver = OutcomeResolver()
+        assert resolver.open_count == 0
+        rows  = [_open_row("ord-1", "NVDA", 100.0)]
+        fills = {"NVDA": [{"price": 106.0, "qty": 1, "time": "t"}]}
+        with patch("core.shadow_learning.OutcomeResolver._backfill_supabase"):
+            resolved = resolver.resolve_from_db_and_portfolio(
+                rows, open_symbols=set(), closing_fills=fills,
+            )
+        assert resolved == [pytest.approx(0.06, rel=0.01)]
+
 
 # ── 2. PromotionGate ──────────────────────────────────────────────────────────
 
@@ -387,3 +483,21 @@ class TestArgusOutcomeResolverWiring:
         with patch("core.shadow_learning.OutcomeResolver._backfill_supabase"):
             pnl = argus.outcome_resolver.resolve_closed("ord-99", exit_price=159.0, side="BUY")
         assert pnl == pytest.approx(0.06, rel=0.01)
+
+    def test_resolve_closed_outcomes_skips_in_mock_mode(self):
+        from agents.argus import ArgusAgent
+        argus = ArgusAgent(mock=True)
+        with patch.object(argus.outcome_resolver, "resolve_from_db_and_portfolio") as spy:
+            argus._resolve_closed_outcomes(ib=MagicMock())
+        spy.assert_not_called()
+
+    def test_resolve_closed_outcomes_never_propagates(self):
+        """A failure in outcome resolution must not break the portfolio tick."""
+        from agents.argus import ArgusAgent
+        import agents.argus as argus_mod
+        argus = ArgusAgent()  # not mock
+        # Force the Supabase gate on, then make fetch_open_trades blow up.
+        with patch.object(argus_mod, "_USE_SUPABASE", True), \
+             patch("core.supabase_client.fetch_open_trades", side_effect=RuntimeError("boom")):
+            # Should swallow the error, not raise.
+            argus._resolve_closed_outcomes(ib=MagicMock())

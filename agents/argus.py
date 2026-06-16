@@ -102,6 +102,9 @@ class ArgusAgent:
             try:
                 ib           = self._get_connection()
                 self._state  = self._build_state(ib)
+                # Backfill outcomes for trades the broker's bracket has closed.
+                # DB-driven + best-effort: never let it break the portfolio tick.
+                self._resolve_closed_outcomes(ib)
             except Exception as exc:
                 logger.warning("[ARGUS] IB refresh failed (%s) — falling back to Supabase equity", exc)
                 # Recompute equity from Supabase positions so the dashboard
@@ -133,6 +136,63 @@ class ArgusAgent:
                     self._state.current_drawdown_pct * 100,
                     len(self._state.snapshots))
         return self._state
+
+    def _resolve_closed_outcomes(self, ib) -> None:
+        """Detect trades the IB bracket has closed and backfill pnl_pct/hit.
+
+        Restart-safe: reconstructs the open set from the DB (not in-memory
+        tracking), so it resolves outcomes even after a container restart.
+        Best-effort — any failure is logged and never breaks the portfolio tick.
+        """
+        if self._mock or not _USE_SUPABASE:
+            return
+        try:
+            import core.supabase_client as supa
+            from config.settings import load_settings
+            open_db = supa.fetch_open_trades()
+            if not open_db:
+                return
+            open_symbols  = {s.symbol for s in self._state.snapshots}
+            closing_fills = self._closing_fills_by_symbol(ib)
+            allow_approx  = bool(
+                load_settings().get("outcome_resolution", {}).get("allow_approximate_exit", False)
+            )
+            resolved = self.outcome_resolver.resolve_from_db_and_portfolio(
+                open_db, open_symbols, closing_fills, None, allow_approx,
+            )
+            if resolved:
+                logger.info("[ARGUS] Backfilled %d closed trade outcome(s)", len(resolved))
+        except Exception as exc:
+            logger.warning("[ARGUS] outcome resolution failed: %s", exc)
+
+    @staticmethod
+    def _closing_fills_by_symbol(ib) -> dict[str, list]:
+        """Map symbol -> [{price, qty, time}] of IB closing executions, oldest-first.
+
+        Long-only system: a closing execution is a SELL (side 'SLD'). Best-effort —
+        returns {} on any error so a fills hiccup never breaks the tick.
+        """
+        out: dict[str, list] = {}
+        try:
+            for f in ib.fills():
+                ex = getattr(f, "execution", None)
+                if ex is None or getattr(ex, "side", "") != "SLD":
+                    continue
+                sym = getattr(getattr(f, "contract", None), "symbol", None)
+                if not sym:
+                    continue
+                price = getattr(ex, "avgPrice", None) or getattr(ex, "price", None)
+                out.setdefault(sym, []).append({
+                    "price": price,
+                    "qty":   getattr(ex, "shares", None),
+                    "time":  getattr(ex, "time", None),
+                })
+        except Exception as exc:
+            logger.debug("[ARGUS] could not read IB fills: %s", exc)
+            return {}
+        for sym in out:
+            out[sym].sort(key=lambda d: d.get("time") or "")
+        return out
 
     def open_position_count(self) -> int:
         return len(self._state.snapshots)
@@ -298,14 +358,36 @@ class ArgusAgent:
             if self._on_kill:
                 self._on_kill(f"drawdown {dd*100:.1f}%")
 
+    def _open_position_count(self, supa) -> int:
+        """Authoritative open-position count from portfolio_positions.
+
+        len(self._state.snapshots) comes from ib.portfolio(), which can briefly
+        return empty right after the gateway (re)starts or on a transient hiccup.
+        Writing that 0 into portfolio_state desyncs it from the real open rows
+        (the bug: state said 0 while NVDA/LIN were open). The DB's open rows are
+        the source of truth, so prefer them and fall back to the live snapshot.
+        """
+        try:
+            rows = supa.get_client().table("portfolio_positions") \
+                .select("symbol", count="exact") \
+                .is_("closed_at", "null") \
+                .execute()
+            db_count = rows.count if rows.count is not None else len(rows.data or [])
+            # Trust the DB unless the live snapshot legitimately shows more
+            # (e.g. a fill that hasn't been persisted yet this cycle).
+            return max(db_count, len(self._state.snapshots))
+        except Exception:
+            return len(self._state.snapshots)
+
     def _persist_to_supabase(self) -> None:
         try:
             import core.supabase_client as supa
+            open_positions = self._open_position_count(supa)
             supa.upsert_portfolio_state({
                 "total_equity":         self._state.total_equity,
                 "peak_equity":          self._state.peak_equity,
                 "current_drawdown_pct": self._state.current_drawdown_pct,
-                "open_positions":       len(self._state.snapshots),
+                "open_positions":       open_positions,
                 "paper_trading":        True,
                 "refreshed_at":         self._state.refreshed_at.isoformat(),
             })
@@ -315,7 +397,7 @@ class ArgusAgent:
                 "total_equity":         self._state.total_equity,
                 "peak_equity":          self._state.peak_equity,
                 "current_drawdown_pct": self._state.current_drawdown_pct,
-                "open_positions":       len(self._state.snapshots),
+                "open_positions":       open_positions,
                 "paper_trading":        True,
                 "recorded_at":          self._state.refreshed_at.isoformat(),
             })

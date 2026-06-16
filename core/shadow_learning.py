@@ -74,19 +74,25 @@ class OutcomeResolver:
         logger.debug("[OUTCOME] Tracking open order %s %s @ %.2f side=%s", order_id, symbol, fill_price, side)
 
     def resolve_closed(self, order_id: str, exit_price: float,
-                       side: str, closed_at: Optional[datetime] = None) -> Optional[float]:
+                       side: str, closed_at: Optional[datetime] = None,
+                       fill_price: Optional[float] = None) -> Optional[float]:
         """
         Called when Argus detects a position has closed.
         Calculates pnl_pct, writes to Supabase + ChromaDB, removes from tracking.
-        Returns pnl_pct or None if order_id was not tracked.
+        Returns pnl_pct or None if the entry price is unknown.
+
+        fill_price: pass explicitly (DB-driven, restart-safe path) to use the
+        trade row's entry price directly. If omitted, falls back to the in-memory
+        _open_orders tracking (legacy path). The explicit value wins so resolution
+        works after a restart when _open_orders is empty.
         """
         entry = self._open_orders.pop(order_id, None)
-        if entry is None:
-            fill_price = None
-        else:
-            fill_price, side = entry
+        if entry is not None:
+            tracked_fill, side = entry
+            if fill_price is None:
+                fill_price = tracked_fill
         if fill_price is None:
-            logger.debug("[OUTCOME] order_id %s not in tracking — skipping", order_id)
+            logger.debug("[OUTCOME] order_id %s has no known fill price — skipping", order_id)
             return None
 
         closed_at = closed_at or datetime.now(timezone.utc)
@@ -145,6 +151,98 @@ class OutcomeResolver:
                     resolved.append(pnl)
 
         return resolved
+
+    def resolve_from_db_and_portfolio(
+        self,
+        open_db_trades: list[dict],
+        open_symbols: set[str],
+        closing_fills: Optional[dict[str, list]] = None,
+        last_prices: Optional[dict[str, float]] = None,
+        allow_approximate: bool = False,
+    ) -> list[float]:
+        """
+        Restart-safe batch resolution driven by the DB, not the in-memory dict.
+
+        open_db_trades:  trade rows with hit IS NULL (from supa.fetch_open_trades);
+                         each needs order_id, symbol, side, fill_price, and ideally
+                         qty/stop_loss/take_profit/recorded_at.
+        open_symbols:    symbols currently open in IB's portfolio. A trade whose
+                         symbol is NOT here was closed by the broker's bracket.
+        closing_fills:   symbol -> [{price, qty, time}] of actual IB closing
+                         executions (the trusted exit price), oldest-first.
+        last_prices:     symbol -> last known price (approximate fallback only).
+        allow_approximate: when False (default), trades with no trusted closing
+                         fill are left OPEN rather than backfilled with a guessed
+                         price — protects Pythia's hit-rate from corruption.
+
+        Returns the list of resolved pnl_pcts.
+        """
+        closing_fills = closing_fills or {}
+        last_prices   = last_prices or {}
+        resolved: list[float] = []
+
+        # Group candidate rows by symbol (only symbols no longer open can close),
+        # FIFO by recorded_at so multiple same-symbol rows map to fills in order.
+        by_symbol: dict[str, list[dict]] = {}
+        for row in open_db_trades:
+            sym = row.get("symbol")
+            if not sym or sym in open_symbols:
+                continue  # still open in the portfolio — not closed
+            by_symbol.setdefault(sym, []).append(row)
+
+        for sym, rows in by_symbol.items():
+            rows.sort(key=lambda r: r.get("recorded_at") or "")
+            fills = list(closing_fills.get(sym, []))  # consumed FIFO
+            for row in rows:
+                order_id   = row.get("order_id")
+                fill_price = row.get("fill_price")
+                side       = row.get("side") or "BUY"
+                if not order_id or fill_price is None:
+                    logger.warning("[OUTCOME] open trade %s/%s has no fill_price — left open",
+                                   sym, order_id)
+                    continue
+                try:
+                    exit_price, closed_at, source = self._exit_price_for(
+                        row, fills, last_prices, allow_approximate,
+                    )
+                    if exit_price is None:
+                        logger.warning("[OUTCOME] %s %s closed but no trusted exit price "
+                                       "(approximate=%s) — left open", sym, order_id, allow_approximate)
+                        continue
+                    pnl = self.resolve_closed(order_id, exit_price, side,
+                                              closed_at=closed_at, fill_price=fill_price)
+                    if pnl is not None:
+                        logger.info("[OUTCOME] backfilled %s %s via %s", sym, order_id, source)
+                        resolved.append(pnl)
+                except Exception as exc:
+                    logger.warning("[OUTCOME] resolve failed for %s %s: %s", sym, order_id, exc)
+
+        return resolved
+
+    @staticmethod
+    def _exit_price_for(row, fills, last_prices, allow_approximate):
+        """Exit-price fallback chain → (exit_price, closed_at, source) or (None, ..).
+
+        (a) actual IB closing fill matched by qty (consumed FIFO) — trusted.
+        (b) stored stop_loss — approximate, conservative (biases to a loss).
+        (c) last known price — approximate, weakest.
+        """
+        qty = row.get("qty")
+        # (a) trusted: a closing fill, preferring an exact qty match.
+        for i, f in enumerate(fills):
+            if qty is None or f.get("qty") in (None, qty):
+                fills.pop(i)
+                return f.get("price"), f.get("time"), "ib_fill"
+        if not allow_approximate:
+            return None, None, "none"
+        # (b) approximate: stored stop_loss (conservative).
+        if row.get("stop_loss") is not None:
+            return row["stop_loss"], None, "approx_stop_loss"
+        # (c) approximate: last known price.
+        sym = row.get("symbol")
+        if sym in last_prices:
+            return last_prices[sym], None, "approx_last_price"
+        return None, None, "none"
 
     @property
     def open_count(self) -> int:

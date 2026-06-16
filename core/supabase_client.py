@@ -113,6 +113,27 @@ def count_closed_trades() -> Optional[int]:
         return None
 
 
+def fetch_open_trades() -> list[dict]:
+    """Return individual OPEN trade rows (hit IS NULL) for outcome resolution.
+
+    Distinct from get_open_trades() below, which returns hit-rate AGGREGATES for
+    Pythia. This returns the actual trade rows the OutcomeResolver needs to match
+    against IB's live portfolio. Uses idx_trades_open ON trades(hit) WHERE hit IS NULL.
+    """
+    try:
+        res = (
+            get_client()
+            .table("trades")
+            .select("order_id, symbol, side, fill_price, stop_loss, take_profit, qty, recorded_at")
+            .is_("hit", "null")
+            .execute()
+        )
+        return res.data or []
+    except Exception as exc:
+        logger.error("[SUPABASE] fetch_open_trades failed: %s", exc)
+        return []
+
+
 def get_open_trades(min_samples: int = 10) -> list[dict]:
     """Return context_key rows that have enough closed trades for Pythia."""
     try:

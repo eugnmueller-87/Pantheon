@@ -35,6 +35,13 @@ _DEFAULTS: dict[str, Any] = {
     # Risk parameters — Ares bracket order
     "stop_loss_pct": 0.03,        # 3% stop
     "take_profit_pct": 0.06,      # 6% target (2:1 R/R)
+    # Outcome resolution — Argus backfills pnl_pct/hit when the IB bracket closes
+    # a position. allow_approximate_exit OFF means a close with no trusted IB fill
+    # is left open rather than backfilled with a guessed price — protects Pythia's
+    # hit-rate data. Flip ON briefly to clear historical stuck trades.
+    "outcome_resolution": {
+        "allow_approximate_exit": False,
+    },
     # ZEUS bull/bear debate — adversarial sub-step before the Director verdict.
     # Bull argues to take the trade, Bear rebuts (sees the bull's case), then
     # ZEUS adjudicates with both arguments in context. Strictly additive: if a
