@@ -246,11 +246,17 @@ def upsert_portfolio_positions(positions: list[dict]) -> None:
 # ── Decision traces ────────────────────────────────────────────────────────────
 
 def insert_decision_trace(trace: dict) -> None:
-    """Write a full pipeline audit trace (every signal, win or loss)."""
+    """Write a full pipeline audit trace (every signal, win or loss).
+
+    signal_id is persisted: decision_traces.signal_id is a nullable uuid with NO
+    foreign-key constraint (the old "drop to avoid FK" comment was stale — the FK
+    was removed but the strip lingered). Keeping it lets a trace correlate to its
+    source signal — without it, every trace stored NULL and the re-debate leak
+    (same signal_id debated 3-5×) was invisible. NULL is fine for the replay/
+    decide() path that has no source row.
+    """
     try:
-        # Drop signal_id to avoid FK constraint — it's a correlation ID, not a true FK
-        row = {k: v for k, v in trace.items() if k != "signal_id"}
-        get_client().table("decision_traces").insert(row).execute()
+        get_client().table("decision_traces").insert(trace).execute()
     except Exception as exc:
         logger.error("[SUPABASE] insert_decision_trace failed: %s", exc)
 

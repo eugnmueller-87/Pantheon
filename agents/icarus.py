@@ -599,8 +599,18 @@ class IcarusAgent:
 
     def _fetch_from_supabase(self) -> list[RawSignal]:
         """
-        Read unconsumed signals from Supabase, map them to RawSignal,
-        apply quality filters, and mark consumed in one atomic DB call.
+        Read unconsumed signals from Supabase, mark them consumed IMMEDIATELY
+        (before mapping/returning), then map the rows to RawSignal.
+
+        Why mark first: the auto-scheduler fires a new ZEUS cycle every ~900s,
+        but mapping does live per-row ticker lookups and a full bull/bear LLM
+        debate can take 30-60s. If we marked consumed *after* mapping (the old
+        behaviour), an overlapping cycle would re-fetch the still-unconsumed rows
+        and pay for the SAME 5K-char debate again — observed 3-5× per signal,
+        ~$4/day of redundant Sonnet output. Claiming a row up front closes that
+        window. Trade-off (accepted, for cost control): a row that errors mid-map
+        is still marked consumed and won't be retried — a dropped signal is far
+        cheaper than re-debating every signal several times.
         """
         _USE_SUPABASE = bool(
             os.getenv("SUPABASE_URL") and os.getenv("SUPABASE_SERVICE_ROLE_KEY")
@@ -618,14 +628,22 @@ class IcarusAgent:
         if not rows:
             return []
 
-        signals, consumed_ids = self._map_supabase_rows(rows, mark_consumed=False)
+        # Claim the batch BEFORE any expensive work so a concurrent cycle can't
+        # re-grab and re-debate these rows. mark_signals_consumed only flips
+        # FALSE→TRUE, so it's safe even if two cycles race on the same batch.
+        batch_ids = [r["signal_id"] for r in rows if r.get("signal_id")]
+        if batch_ids:
+            try:
+                n = supa.mark_signals_consumed(batch_ids)
+                logger.info("[ICARUS] Supabase: claimed %d signal(s) consumed before processing.", n)
+            except Exception as exc:
+                # If the claim fails we abort rather than risk re-debating: better
+                # to skip this cycle than to process rows we couldn't lock.
+                logger.warning("[ICARUS] consume-claim failed (%s) — skipping cycle to avoid re-debate.", exc)
+                return []
 
-        # Mark all processed rows consumed in one atomic DB call
-        if consumed_ids:
-            import core.supabase_client as supa
-            n = supa.mark_signals_consumed(consumed_ids)
-            logger.info("[ICARUS] Supabase: %d signal(s) fetched, %d row(s) marked consumed.", len(signals), n)
-
+        signals, _ = self._map_supabase_rows(rows, mark_consumed=False)
+        logger.info("[ICARUS] Supabase: %d signal(s) ready for Zeus.", len(signals))
         return signals
 
     def _map_supabase_rows(
