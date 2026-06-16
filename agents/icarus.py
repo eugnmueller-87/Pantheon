@@ -116,16 +116,35 @@ _DIVISION_PARENT_MAP: dict[str, str] = {
     "OpenAI": "MSFT",
 }
 
-# Private companies / non-tradeable tickers — drop signals cleanly before Apollo lookup.
-# These would otherwise resolve to phantom tickers (e.g. OPENAI-USD) and waste LLM calls.
+# Private companies / non-tradeable names — drop signals cleanly at Icarus
+# (binding_constraint=out_of_universe) BEFORE they resolve to a phantom ticker or
+# get mis-mapped onto a loosely-adjacent public name and waste an LLM call.
+#
+# NOTE on SpaceX: it is PRIVATE. The ticker "SPCX" some feeds surface is a
+# tracking SPV/derivative, NOT SpaceX equity. Mapping SpaceX→TSLA ("Musk
+# adjacency") would manufacture exactly the broken signal→ticker link ZEUS
+# already correctly vetoes — so SpaceX drops here instead. (Treating SPCX as a
+# real tradeable instrument is a separate, deliberate decision — not a lookup fix.)
 _PRIVATE_COMPANY_SUPPLIERS: frozenset[str] = frozenset({
+    # AI labs
     "OpenAI",          # private — resolves to OPENAI-USD phantom ticker
     "Anthropic",       # private
     "xAI",             # private (Elon Musk's AI co)
-    "Mistral AI",      # private
-    "Cohere",          # private
-    "Stability AI",    # private
-    "Hugging Face",    # private
+    "Mistral AI", "Mistral",
+    "Cohere",
+    "Stability AI",
+    "Hugging Face",
+    "Databricks",      # private
+    # Musk-adjacent / aerospace — private, no common equity
+    "SpaceX", "Space Exploration Technologies", "Space Exploration Technologies Corp",
+    "Starlink",        # SpaceX division — private
+    "Neuralink", "The Boring Company",
+    # Other frequently-headlined private companies. Only DISTINCTIVE names —
+    # ambiguous common-word brands (Stripe, Discord, Chime, Canva, Revolut)
+    # are deliberately omitted: as bare-word matches they'd false-drop ordinary
+    # supplier/headline text, which is worse than letting a rare private-co
+    # signal slip through to ZEUS (which would veto it anyway).
+    "ByteDance", "TikTok", "SHEIN", "Epic Games",
 })
 
 _UUID_RE = re.compile(
@@ -178,6 +197,31 @@ def _sanitize_signal_id(raw_id: str) -> str:
         return raw_id.strip()
     # Deterministic UUID from the raw ID so same signal always gets same UUID
     return str(uuid.uuid5(uuid.NAMESPACE_URL, raw_id or str(uuid.uuid4())))
+
+
+_PRIVATE_SUPPLIERS_LOWER = frozenset(s.lower() for s in _PRIVATE_COMPANY_SUPPLIERS)
+
+
+def _is_private_supplier(supplier: str) -> bool:
+    """True if the supplier is a private / non-tradeable name we drop cleanly.
+
+    Matches case-insensitively on WORD BOUNDARIES — not raw substring — so a
+    feed variant like 'SpaceX eyes funding' or 'Space Exploration Technologies
+    Corp' is caught, while lookalikes like 'Revolution Medicines' (≠ Revolut),
+    'Chimera' (≠ Chime), or 'Canvas' (≠ Canva) are NOT false-dropped.
+    """
+    if not supplier:
+        return False
+    s = supplier.lower()
+    if s in _PRIVATE_SUPPLIERS_LOWER:
+        return True
+    # Word-boundary match: the private name must appear as whole word(s).
+    tokens = set(re.findall(r"[a-z0-9]+", s))
+    for name in _PRIVATE_SUPPLIERS_LOWER:
+        parts = re.findall(r"[a-z0-9]+", name)
+        if parts and all(p in tokens for p in parts):
+            return True
+    return False
 
 
 def _resolve_ticker(supplier: str) -> str | None:
@@ -233,9 +277,13 @@ def _map_signal(item: dict) -> Optional[RawSignal]:
         severity = Severity.CRITICAL
 
     supplier = item.get("supplier", "")
-    # Drop signals from private companies before they waste an LLM call
-    if supplier in _PRIVATE_COMPANY_SUPPLIERS:
-        logger.info("[ICARUS] Dropping private-company signal (%s): %s", supplier, item.get("title", "")[:60])
+    # Drop signals for private / non-tradeable names before they waste an LLM
+    # call. Out-of-universe drop, recorded explicitly (binding=out_of_universe).
+    if _is_private_supplier(supplier):
+        logger.info(
+            "[ICARUS] out_of_universe — dropping private/untradeable signal (%s): %s",
+            supplier, item.get("title", "")[:60],
+        )
         return None
     ticker   = _resolve_ticker(supplier)
     tickers  = [ticker] if ticker else []
