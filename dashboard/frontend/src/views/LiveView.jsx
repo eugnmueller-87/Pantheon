@@ -1,18 +1,27 @@
 // The original 4-column live grid, now composed from extracted panels.
+// Data comes from Supabase (useLiveData) — the same persisted source the
+// CLASSIC/AGENTS/COST tabs read — NOT the dashboard's in-process WS bus, which
+// only fills via the RUN button and reported a false "ICARUS failed". The live
+// WS `status` (equity/positions/circuit breakers) is still used as the freshest
+// portfolio snapshot.
 import { PipelinePanel } from '../panels/PipelinePanel'
 import {
   EquityPanel, SignalAnalysisPanel, PortfolioPanel,
   LiveFeedPanel, ZeusReasoningPanel, PerformancePanel,
 } from '../panels/LivePanels'
+import { useLiveData } from '../hooks/useLiveData'
 
-export function LiveView({ socket, metrics }) {
+export function LiveView({ socket }) {
+  const live = useLiveData(socket?.status)
   const {
     status, activeStage, killStage, agentMap, displayed,
     chartData, signalTypeCounts, killStageCounts,
     signalEvents, tradeEvents, killEvents, visibleEvents,
     latestSignal, latestTrade, latestKill,
-  } = socket
-  const { equity, pnlPct, pnlColor, drawdown, ddColor, approvalPct, killPct } = metrics
+    equity, pnlPct, drawdown, approvalPct, killPct,
+  } = live
+  const pnlColor = pnlPct >= 0 ? 'var(--green)' : 'var(--red)'
+  const ddColor = drawdown > 6 ? 'var(--red)' : drawdown > 3 ? 'var(--yellow)' : 'var(--green)'
 
   return (
     <div style={{

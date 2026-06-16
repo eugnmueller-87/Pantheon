@@ -108,10 +108,20 @@ function useClassicData(status) {
       open: t.hit == null,
     }))
 
+    // "Estimated" flag: realized P&L exists from closed trades, but the equity
+    // curve never moved (balance == start). That's the backlog we closed at
+    // estimated stop_loss prices — written to `trades` but never flowed through
+    // the equity engine, so Balance stays real (€4000) while profit shows a
+    // loss. Surface a badge so the two numbers don't read as a contradiction.
+    const realizedNonZero = closed.length > 0 && Math.abs(profit7d) > 0.005
+    const equityFlat = withIncome.length > 0 && Math.abs(withIncome[withIncome.length - 1].balance - withIncome[0].balance) < 0.005
+    const profitIsEstimated = realizedNonZero && equityFlat
+
     return {
       eqVal, withIncome, profitToday, profit7d, pct7d, unrealized,
       mostTraded, tradesToday: todays.length, pie, totalNotional, performers, last,
       totalTrades: perf?.total_trades ?? (trades || []).length,
+      profitIsEstimated,
     }
   }, [trades, equity, perf, status, dbPositions])
 }
@@ -135,8 +145,10 @@ function DashboardPage({ d }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       {/* KPI strip */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 14 }}>
-        <KpiTile tone="green"  label="Profit Today"      value={eur(d.profitToday)} />
-        <KpiTile tone="blue"   label="Profit last 7 days" value={eur(d.profit7d)} />
+        <KpiTile tone="green"  label="Profit Today"      value={eur(d.profitToday)}
+          badge={d.profitIsEstimated ? { text: 'EST.', title: 'Includes trades closed at estimated stop_loss prices — not real fills, so Balance is unaffected.' } : null} />
+        <KpiTile tone="blue"   label="Profit last 7 days" value={eur(d.profit7d)}
+          badge={d.profitIsEstimated ? { text: 'EST.', title: 'Includes trades closed at estimated stop_loss prices — not real fills, so Balance is unaffected.' } : null} />
         <KpiTile tone={d.unrealized >= 0 ? 'green' : 'red'} label="Unrealised PnL" value={eur(d.unrealized)} />
         <KpiTile tone="amber"  label="Most traded today"  value={d.mostTraded} />
         <KpiTile tone="purple" label="Trades today"       value={d.tradesToday} />

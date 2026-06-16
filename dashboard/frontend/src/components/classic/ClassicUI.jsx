@@ -29,11 +29,20 @@ const TONES = {
   plain:  { bg: 'var(--c-card)',        fg: 'var(--c-text)' },
 }
 
-export function KpiTile({ label, value, tone = 'plain' }) {
+export function KpiTile({ label, value, tone = 'plain', badge }) {
   const t = TONES[tone] || TONES.plain
   return (
     <div className="c-card" style={{ background: t.bg, border: 'none', padding: '16px 18px', minWidth: 0 }}>
-      <div className="c-kpi-value" style={{ color: t.fg }}>{value}</div>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, flexWrap: 'wrap' }}>
+        <div className="c-kpi-value" style={{ color: t.fg }}>{value}</div>
+        {badge && (
+          <span title={badge.title}
+            style={{ fontSize: 9, fontWeight: 700, letterSpacing: 0.5, color: t.fg, opacity: 0.7,
+              border: `1px solid ${t.fg}`, borderRadius: 10, padding: '1px 6px', cursor: 'help' }}>
+            {badge.text}
+          </span>
+        )}
+      </div>
       <div className="c-kpi-label" style={{ color: t.fg, opacity: 0.85, marginTop: 2 }}>{label}</div>
     </div>
   )
