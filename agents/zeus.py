@@ -294,6 +294,22 @@ class ZeusOrchestrator:
                 "fix anthropic_model_director in settings.json / the API key.", model, exc)
             raise RuntimeError(f"Anthropic model '{model}' unusable: {exc}") from exc
 
+    def _budget_equity(self) -> float:
+        """Equity the budget cap is computed against. Prefer LIVE equity from
+        Argus so the cap tracks gains/drawdown; fall back to the configured
+        starting balance when Argus hasn't refreshed yet (0.0 / None / error),
+        logging a WARN so the fallback is visible."""
+        try:
+            live = self.argus.portfolio_state().total_equity
+        except Exception as exc:
+            logger.warning("[ZEUS] could not read live equity (%s) — using config equity", exc)
+            live = None
+        if live and live > 0:
+            return float(live)
+        logger.warning("[ZEUS] live equity unavailable — budget cap on config €%.0f",
+                       self.config.default_account_equity)
+        return float(self.config.default_account_equity)
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -603,7 +619,7 @@ class ZeusOrchestrator:
         # wallet (DB-based committed capital vs equity) before approving — this
         # also fails SAFE when IB is down (committed_capital reads the DB, not a
         # live position count that silently returns 0 when the broker is gone).
-        equity        = self.config.default_account_equity
+        equity        = self._budget_equity()
         committed     = self.argus.committed_capital()
         trade_cost    = equity * sized.position_size_pct
         max_deployed  = equity * self.config.max_deployed_pct
