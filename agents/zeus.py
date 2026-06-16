@@ -80,6 +80,11 @@ class ZeusConfig:
     take_profit_pct:              float = 0.06
     ib_paper_port:                int   = 4002
     ib_live_port:                 int   = 4001
+    # Single source of truth for the Anthropic model IDs (was hardcoded in 4
+    # call sites). claude-sonnet-4-6 is the current Sonnet. Overridable via
+    # settings.json so an account-specific / upgraded ID changes in one place.
+    anthropic_model_director:     str   = "claude-sonnet-4-6"
+    anthropic_model_debate:       str   = "claude-sonnet-4-6"
 
 
 @dataclass
@@ -134,6 +139,10 @@ class ZeusOrchestrator:
             self.config.debate_rounds = int(_s.get("debate_rounds", 1))
         if self.config.debate_max_tokens == 400:
             self.config.debate_max_tokens = int(_s.get("debate_max_tokens", 400))
+        if self.config.anthropic_model_director == "claude-sonnet-4-6":
+            self.config.anthropic_model_director = str(_s.get("anthropic_model_director", "claude-sonnet-4-6"))
+        if self.config.anthropic_model_debate == "claude-sonnet-4-6":
+            self.config.anthropic_model_debate = str(_s.get("anthropic_model_debate", "claude-sonnet-4-6"))
 
         # Account equity — single source of truth for stage gate AND € sizing.
         # Prefer explicit config; else settings.json. FAIL CLOSED if neither
@@ -244,6 +253,7 @@ class ZeusOrchestrator:
         if not api_key:
             raise RuntimeError("ANTHROPIC_API_KEY is not set — LLM reasoning will fail. Check your .env.")
         self._claude = anthropic.Anthropic(api_key=api_key)
+        self._verify_model_or_die()
         self.bridge  = RedisBridge()   # SpendLens intelligence feed
 
         self._register_watchdog()
@@ -259,6 +269,30 @@ class ZeusOrchestrator:
             "[ZEUS] Initialised — paper=%s mock=%s llm_reasoning=%s",
             self.config.paper_trading, self.config.mock_execution, self.config.use_llm_reasoning,
         )
+
+    def _verify_model_or_die(self) -> None:
+        """Boot-time dry-run of the director model. A bad/unauthorized model ID
+        must be a LOUD failure here — otherwise every LLM call throws at runtime
+        and ZEUS silently falls back to Pattern-only scoring, masking the cause.
+        Skipped when LLM reasoning is off (mock mode) or ZEUS_SKIP_MODEL_CHECK=1
+        (offline/tests)."""
+        if not self.config.use_llm_reasoning:
+            return
+        if os.getenv("ZEUS_SKIP_MODEL_CHECK") == "1":
+            logger.info("[ZEUS] Model dry-run skipped (ZEUS_SKIP_MODEL_CHECK=1)")
+            return
+        model = self.config.anthropic_model_director
+        try:
+            self._claude.messages.create(
+                model=model, max_tokens=1,
+                messages=[{"role": "user", "content": "ping"}],
+            )
+            logger.info("[ZEUS] Model dry-run OK — %s reachable", model)
+        except Exception as exc:
+            logger.critical(
+                "[ZEUS] Model dry-run FAILED for '%s': %s. Refusing to start — "
+                "fix anthropic_model_director in settings.json / the API key.", model, exc)
+            raise RuntimeError(f"Anthropic model '{model}' unusable: {exc}") from exc
 
     # ------------------------------------------------------------------
     # Public API
@@ -696,7 +730,7 @@ class ZeusOrchestrator:
 
         try:
             response = self._claude.messages.create(
-                model="claude-sonnet-4-6",
+                model=self.config.anthropic_model_director,
                 max_tokens=1500,
                 messages=[{"role": "user", "content": prompt}],
             )
@@ -746,7 +780,7 @@ class ZeusOrchestrator:
                 "BULL", sized, macro, kb_context, live_context, opponent_case=""
             )
             bull_resp = self._claude.messages.create(
-                model="claude-sonnet-4-6",
+                model=self.config.anthropic_model_debate,
                 max_tokens=self.config.debate_max_tokens,
                 messages=[{"role": "user", "content": bull_prompt}],
             )
@@ -761,7 +795,7 @@ class ZeusOrchestrator:
                 "BEAR", sized, macro, kb_context, live_context, opponent_case=bull_case
             )
             bear_resp = self._claude.messages.create(
-                model="claude-sonnet-4-6",
+                model=self.config.anthropic_model_debate,
                 max_tokens=self.config.debate_max_tokens,
                 messages=[{"role": "user", "content": bear_prompt}],
             )
@@ -838,7 +872,7 @@ Write 3-5 tight sentences. No preamble, no JSON — just your argument."""
 
             import core.supabase_client as supa
             supa.get_client().table("llm_usage").insert({
-                "model":       "claude-sonnet-4-6",
+                "model":       self.config.anthropic_model_director,
                 "symbol":      symbol,
                 "input_tokens":  input_tok,
                 "output_tokens": output_tok,
