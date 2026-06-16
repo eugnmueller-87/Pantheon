@@ -7,6 +7,56 @@ import '../theme/classic-light.css'
 import { Card } from '../components/classic/ClassicUI'
 import { useTraces } from '../hooks/useSupabaseData'
 
+// ── Export helpers (dependency-free: build a Blob and click a temp link) ───────
+function downloadBlob(content, filename, type) {
+  const blob = new Blob([content], { type })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
+
+// Columns exported to CSV — flat, spreadsheet-friendly. ZEUS reasoning is long
+// and multi-line so it goes last (quoted). JSON export keeps the full rows.
+const CSV_COLS = [
+  'timestamp', 'symbol', 'side', 'headline', 'supplier', 'category', 'severity',
+  'pattern_confidence', 'trend_regime', 'trend_vix', 'zeus_approved',
+  'trade_placed', 'killed_at_stage', 'kill_reason', 'fill_price', 'pnl_pct',
+  'zeus_reasoning',
+]
+
+function csvCell(v) {
+  if (v == null) return ''
+  const s = String(v)
+  // RFC-4180 quoting: wrap if it contains comma, quote, or newline; double quotes.
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+}
+
+function toCsv(rows) {
+  const header = CSV_COLS.join(',')
+  const body = rows.map(r => CSV_COLS.map(c => csvCell(r[c])).join(',')).join('\n')
+  return `${header}\n${body}`
+}
+
+function stamp() {
+  // Local YYYY-MM-DD_HH-MM for the filename (no Date.now needed in component).
+  const d = new Date()
+  const p = n => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}_${p(d.getHours())}-${p(d.getMinutes())}`
+}
+
+const exportBtn = (disabled) => ({
+  fontSize: 11, fontWeight: 600, cursor: disabled ? 'not-allowed' : 'pointer',
+  padding: '5px 10px', borderRadius: 20, fontFamily: 'inherit',
+  border: '1px solid var(--c-border)', background: 'var(--c-card)',
+  color: disabled ? 'var(--c-text-faint)' : 'var(--c-blue)',
+  opacity: disabled ? 0.5 : 1,
+})
+
 // Where a signal ended up → label + light tone. null killed_at_stage + trade
 // placed = executed; null + not placed = passed but not filled.
 const STAGE = {
@@ -94,13 +144,24 @@ export function LogsView() {
     }
   }, [traces, filter])
 
+  // Export whatever is currently shown (respects the active filter).
+  function exportRows(fmt) {
+    if (!rows.length) return
+    const name = `pantheon-logs_${filter}_${stamp()}`
+    if (fmt === 'json') {
+      downloadBlob(JSON.stringify(rows, null, 2), `${name}.json`, 'application/json')
+    } else {
+      downloadBlob(toCsv(rows), `${name}.csv`, 'text/csv;charset=utf-8')
+    }
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <Card
         title="Decision Logs"
         sub={`${rows.length} signal${rows.length === 1 ? '' : 's'} — which stock the pipeline tried & where it ended`}
         action={
-          <div style={{ display: 'flex', gap: 6 }}>
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
             {FILTERS.map(f => (
               <button key={f} onClick={() => setFilter(f)} style={{
                 fontSize: 11, fontWeight: 600, textTransform: 'capitalize', cursor: 'pointer',
@@ -109,6 +170,19 @@ export function LogsView() {
                 background: filter === f ? 'var(--c-green-soft)' : '#f1f3f7',
               }}>{f}</button>
             ))}
+            <span style={{ width: 1, height: 18, background: 'var(--c-border)', margin: '0 2px' }} />
+            <button
+              onClick={() => exportRows('csv')}
+              disabled={rows.length === 0}
+              title="Export the shown logs as CSV (spreadsheet)"
+              style={exportBtn(rows.length === 0)}
+            >⬇ CSV</button>
+            <button
+              onClick={() => exportRows('json')}
+              disabled={rows.length === 0}
+              title="Export the shown logs as JSON (full reasoning)"
+              style={exportBtn(rows.length === 0)}
+            >⬇ JSON</button>
           </div>
         }
       >
