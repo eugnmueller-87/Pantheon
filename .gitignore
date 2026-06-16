@@ -16,8 +16,9 @@ logs/
 # ChromaDB derived indexes (rebuilt from knowledge/*.md)
 knowledge/chroma/
 
-# Session handovers — private working notes, never committed
+# Session handovers — private working notes, never committed (any directory)
 HANDOVER_*.md
+**/HANDOVER_*.md
 
 # Environment variables
 .env
