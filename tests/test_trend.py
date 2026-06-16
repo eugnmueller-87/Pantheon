@@ -161,12 +161,17 @@ class TestCaching:
 # ── Fallback on yfinance failure ───────────────────────────────────────────────
 
 class TestFallbackBehaviour:
-    def test_vix_fetch_failure_returns_safe_default(self):
+    def test_vix_fetch_failure_raises_macro_error(self):
+        # Behavior change (was: returns a silent 20.0 default). Artemis now fails
+        # CLOSED — a VIX fetch failure raises MacroFetchError so the pipeline
+        # suppresses on UNKNOWN macro rather than operating on a fabricated benign
+        # VIX. See test_artemis_fallback.py for the suppressed-context assertions.
+        from core.types import MacroFetchError
         trend = TrendAgent()
         with patch('yfinance.Ticker') as mock_ticker:
             mock_ticker.return_value.history.side_effect = RuntimeError("network error")
-            vix = trend._fetch_vix()
-        assert vix == pytest.approx(20.0)
+            with pytest.raises(MacroFetchError):
+                trend._fetch_vix()
 
     def test_sp500_fetch_failure_returns_zero(self):
         trend = TrendAgent()

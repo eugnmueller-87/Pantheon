@@ -49,6 +49,9 @@ _DEFAULTS: dict[str, Any] = {
     "use_debate": True,            # master switch — False reverts to single-shot
     "debate_rounds": 1,            # bull→bear pairs per signal (1 to start)
     "debate_max_tokens": 400,      # output cap per debate call
+    # Anthropic model IDs — single source of truth (override per account/upgrade).
+    "anthropic_model_director": "claude-sonnet-4-6",
+    "anthropic_model_debate":   "claude-sonnet-4-6",
     # Confidence thresholds
     "zeus_min_confidence": 0.55,
     "pythia_default_confidence": 0.55,

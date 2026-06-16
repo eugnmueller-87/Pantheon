@@ -56,6 +56,13 @@ from core.watchdog import Watchdog
 logger = logging.getLogger("zeus")
 
 
+def _fmt_vix(vix: float) -> str:
+    """Render VIX for the LLM prompt. The -1.0 sentinel (Artemis macro fetch
+    failed) must read as UNAVAILABLE — never as a benign number ZEUS could
+    treat as safe."""
+    return "UNAVAILABLE" if vix is None or vix < 0 else f"{vix:.1f}"
+
+
 @dataclass
 class ZeusConfig:
     max_portfolio_drawdown_pct:   float = 0.08
@@ -80,6 +87,11 @@ class ZeusConfig:
     take_profit_pct:              float = 0.06
     ib_paper_port:                int   = 4002
     ib_live_port:                 int   = 4001
+    # Single source of truth for the Anthropic model IDs (was hardcoded in 4
+    # call sites). claude-sonnet-4-6 is the current Sonnet. Overridable via
+    # settings.json so an account-specific / upgraded ID changes in one place.
+    anthropic_model_director:     str   = "claude-sonnet-4-6"
+    anthropic_model_debate:       str   = "claude-sonnet-4-6"
 
 
 @dataclass
@@ -134,6 +146,10 @@ class ZeusOrchestrator:
             self.config.debate_rounds = int(_s.get("debate_rounds", 1))
         if self.config.debate_max_tokens == 400:
             self.config.debate_max_tokens = int(_s.get("debate_max_tokens", 400))
+        if self.config.anthropic_model_director == "claude-sonnet-4-6":
+            self.config.anthropic_model_director = str(_s.get("anthropic_model_director", "claude-sonnet-4-6"))
+        if self.config.anthropic_model_debate == "claude-sonnet-4-6":
+            self.config.anthropic_model_debate = str(_s.get("anthropic_model_debate", "claude-sonnet-4-6"))
 
         # Account equity — single source of truth for stage gate AND € sizing.
         # Prefer explicit config; else settings.json. FAIL CLOSED if neither
@@ -244,6 +260,7 @@ class ZeusOrchestrator:
         if not api_key:
             raise RuntimeError("ANTHROPIC_API_KEY is not set — LLM reasoning will fail. Check your .env.")
         self._claude = anthropic.Anthropic(api_key=api_key)
+        self._verify_model_or_die()
         self.bridge  = RedisBridge()   # SpendLens intelligence feed
 
         self._register_watchdog()
@@ -259,6 +276,46 @@ class ZeusOrchestrator:
             "[ZEUS] Initialised — paper=%s mock=%s llm_reasoning=%s",
             self.config.paper_trading, self.config.mock_execution, self.config.use_llm_reasoning,
         )
+
+    def _verify_model_or_die(self) -> None:
+        """Boot-time dry-run of the director model. A bad/unauthorized model ID
+        must be a LOUD failure here — otherwise every LLM call throws at runtime
+        and ZEUS silently falls back to Pattern-only scoring, masking the cause.
+        Skipped when LLM reasoning is off (mock mode) or ZEUS_SKIP_MODEL_CHECK=1
+        (offline/tests)."""
+        if not self.config.use_llm_reasoning:
+            return
+        if os.getenv("ZEUS_SKIP_MODEL_CHECK") == "1":
+            logger.info("[ZEUS] Model dry-run skipped (ZEUS_SKIP_MODEL_CHECK=1)")
+            return
+        model = self.config.anthropic_model_director
+        try:
+            self._claude.messages.create(
+                model=model, max_tokens=1,
+                messages=[{"role": "user", "content": "ping"}],
+            )
+            logger.info("[ZEUS] Model dry-run OK — %s reachable", model)
+        except Exception as exc:
+            logger.critical(
+                "[ZEUS] Model dry-run FAILED for '%s': %s. Refusing to start — "
+                "fix anthropic_model_director in settings.json / the API key.", model, exc)
+            raise RuntimeError(f"Anthropic model '{model}' unusable: {exc}") from exc
+
+    def _budget_equity(self) -> float:
+        """Equity the budget cap is computed against. Prefer LIVE equity from
+        Argus so the cap tracks gains/drawdown; fall back to the configured
+        starting balance when Argus hasn't refreshed yet (0.0 / None / error),
+        logging a WARN so the fallback is visible."""
+        try:
+            live = self.argus.portfolio_state().total_equity
+        except Exception as exc:
+            logger.warning("[ZEUS] could not read live equity (%s) — using config equity", exc)
+            live = None
+        if live and live > 0:
+            return float(live)
+        logger.warning("[ZEUS] live equity unavailable — budget cap on config €%.0f",
+                       self.config.default_account_equity)
+        return float(self.config.default_account_equity)
 
     # ------------------------------------------------------------------
     # Public API
@@ -569,7 +626,7 @@ class ZeusOrchestrator:
         # wallet (DB-based committed capital vs equity) before approving — this
         # also fails SAFE when IB is down (committed_capital reads the DB, not a
         # live position count that silently returns 0 when the broker is gone).
-        equity        = self.config.default_account_equity
+        equity        = self._budget_equity()
         committed     = self.argus.committed_capital()
         trade_cost    = equity * sized.position_size_pct
         max_deployed  = equity * self.config.max_deployed_pct
@@ -696,7 +753,7 @@ class ZeusOrchestrator:
 
         try:
             response = self._claude.messages.create(
-                model="claude-sonnet-4-6",
+                model=self.config.anthropic_model_director,
                 max_tokens=1500,
                 messages=[{"role": "user", "content": prompt}],
             )
@@ -746,7 +803,7 @@ class ZeusOrchestrator:
                 "BULL", sized, macro, kb_context, live_context, opponent_case=""
             )
             bull_resp = self._claude.messages.create(
-                model="claude-sonnet-4-6",
+                model=self.config.anthropic_model_debate,
                 max_tokens=self.config.debate_max_tokens,
                 messages=[{"role": "user", "content": bull_prompt}],
             )
@@ -761,7 +818,7 @@ class ZeusOrchestrator:
                 "BEAR", sized, macro, kb_context, live_context, opponent_case=bull_case
             )
             bear_resp = self._claude.messages.create(
-                model="claude-sonnet-4-6",
+                model=self.config.anthropic_model_debate,
                 max_tokens=self.config.debate_max_tokens,
                 messages=[{"role": "user", "content": bear_prompt}],
             )
@@ -816,7 +873,7 @@ Category:  {sized.category.value}
 Severity:  {sized.severity.value}
 Tickers:   {sized.affected_tickers}
 
-MACRO: regime={macro.regime.value} | VIX={macro.vix:.1f} | SPY 1m={macro.sp500_1m_return*100:.1f}%
+MACRO: regime={macro.regime.value} | VIX={_fmt_vix(macro.vix)} | SPY 1m={macro.sp500_1m_return*100:.1f}%
 QUANT: Pythia confidence={sized.confidence:.2f}, proposed size={sized.position_size_pct*100:.2f}%
 {live_block}
 ═══════════════════════════════════════════════
@@ -838,7 +895,7 @@ Write 3-5 tight sentences. No preamble, no JSON — just your argument."""
 
             import core.supabase_client as supa
             supa.get_client().table("llm_usage").insert({
-                "model":       "claude-sonnet-4-6",
+                "model":       self.config.anthropic_model_director,
                 "symbol":      symbol,
                 "input_tokens":  input_tok,
                 "output_tokens": output_tok,
@@ -1014,7 +1071,7 @@ Tickers:    {sized.affected_tickers}
 TEAM ASSESSMENT SUMMARY
 ═══════════════════════════════════════════════
 Compliance (Hades):    score {sized.original.compliance_score:.2f}/1.0 | {'; '.join(sized.original.notes) or 'clean'}
-Macro (Artemis):       regime={macro.regime.value} | VIX={macro.vix:.1f} | SPY 1m={macro.sp500_1m_return*100:.1f}%
+Macro (Artemis):       regime={macro.regime.value} | VIX={_fmt_vix(macro.vix)} | SPY 1m={macro.sp500_1m_return*100:.1f}%
                        sector momentum: {macro.sector_momentum}
 Quant sizing (Pythia): pattern confidence={sized.confidence:.2f} | proposed size={sized.position_size_pct*100:.2f}%
 

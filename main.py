@@ -107,6 +107,8 @@ class ZeusHandler(BaseHTTPRequestHandler):
             self._handle_resume()
         elif self.path == "/alert":
             self._handle_alert()
+        elif self.path == "/admin/icarus/quality/reset":
+            self._handle_icarus_quality_reset()
         else:
             self._json_response(404, {"error": "not found"})
 
@@ -182,6 +184,23 @@ class ZeusHandler(BaseHTTPRequestHandler):
             self._json_response(200, {"status": "sent", "message": full_msg})
         except Exception as exc:
             logger.exception("[MAIN] /alert failed")
+            self._json_response(500, {"error": str(exc)})
+
+    def _handle_icarus_quality_reset(self):
+        """POST /admin/icarus/quality/reset — clear a suppressed quality pattern.
+        Body: {"pattern": "<hermes_type>:<keyword>"}. Lets an operator un-mute a
+        signal pattern that the quality filter learned to suppress."""
+        try:
+            length  = int(self.headers.get("Content-Length", 0))
+            body    = json.loads(self.rfile.read(length)) if length else {}
+            pattern = (body.get("pattern") or "").strip()
+            if not pattern:
+                self._json_response(400, {"error": "pattern field required"})
+                return
+            deleted = _zeus.icarus.reset_quality_filter(pattern)
+            self._json_response(200, {"status": "reset", "pattern": pattern, "keys_deleted": deleted})
+        except Exception as exc:
+            logger.exception("[MAIN] /admin/icarus/quality/reset failed")
             self._json_response(500, {"error": str(exc)})
 
     def _handle_halt(self):

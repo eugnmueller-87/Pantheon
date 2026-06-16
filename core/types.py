@@ -35,6 +35,12 @@ class Severity(Enum):
     CRITICAL = 4
 
 
+class MacroFetchError(Exception):
+    """Raised when live macro data (e.g. VIX) can't be fetched. Artemis turns
+    this into a suppressed UNKNOWN macro context instead of silently operating
+    on a hard-coded benign VIX."""
+
+
 class MarketRegime(str, Enum):
     BULL     = "bull"
     BEAR     = "bear"

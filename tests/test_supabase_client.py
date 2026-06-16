@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 import core.supabase_client as supa
 
 
@@ -37,3 +39,48 @@ def test_fetch_open_trades_returns_empty_on_error():
     with patch("core.supabase_client.get_client", return_value=client):
         out = supa.fetch_open_trades()
     assert out == []
+
+
+# ── Seniority gate queries (Section 5) ───────────────────────────────────────
+
+def _mock_count(n):
+    client = MagicMock()
+    client.table.return_value.select.return_value.eq.return_value.execute.return_value = MagicMock(count=n)
+    return client
+
+
+def test_count_hades_compliance_kills():
+    client = _mock_count(7)
+    with patch("core.supabase_client.get_client", return_value=client):
+        assert supa.count_hades_compliance_kills() == 7
+    client.table.assert_called_once_with("decision_traces")
+    client.table.return_value.select.return_value.eq.assert_called_once_with("killed_at_stage", "hades")
+
+
+def test_count_hades_compliance_kills_none_on_error():
+    client = MagicMock()
+    client.table.side_effect = RuntimeError("x")
+    with patch("core.supabase_client.get_client", return_value=client):
+        assert supa.count_hades_compliance_kills() is None
+
+
+def _mock_override_rows(rows):
+    client = MagicMock()
+    client.table.return_value.select.return_value.eq.return_value.execute.return_value = MagicMock(data=rows)
+    return client
+
+
+def test_override_doc_rate_insufficient_sample_returns_none():
+    client = _mock_override_rows([{"zeus_override_reason": "x" * 50}] * 3)  # < 5
+    with patch("core.supabase_client.get_client", return_value=client):
+        assert supa.zeus_override_doc_rate(min_samples=5) is None
+
+
+def test_override_doc_rate_computes_documented_share():
+    rows = (
+        [{"zeus_override_reason": "x" * 50}] * 3       # documented (>=40 chars)
+        + [{"zeus_override_reason": "short"}] * 2      # undocumented
+    )
+    client = _mock_override_rows(rows)
+    with patch("core.supabase_client.get_client", return_value=client):
+        assert supa.zeus_override_doc_rate(min_samples=5) == pytest.approx(0.6)

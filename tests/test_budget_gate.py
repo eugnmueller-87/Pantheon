@@ -83,3 +83,43 @@ class TestBudgetCap:
         cfg = ZeusConfig(max_deployed_pct=0.90)
         committed = 9427.0
         assert committed > equity * cfg.max_deployed_pct  # never would have been allowed
+
+
+# ── Budget gate uses LIVE equity, not config equity ──────────────────────────
+
+class TestBudgetEquitySource:
+    def _zeus_with_argus_equity(self, live_equity):
+        import os
+
+        from agents.zeus import ZeusOrchestrator
+        os.environ["ZEUS_SKIP_MODEL_CHECK"] = "1"
+        cfg = ZeusConfig(default_account_equity=4000.0, mock_execution=True)
+        with patch("agents.zeus.KnowledgeBase"), patch("agents.zeus.CircuitBreaker"), \
+             patch("agents.zeus.Watchdog"), patch("agents.zeus.MilestoneManager"), \
+             patch("agents.zeus.ApolloAgent"), patch("agents.zeus.IcarusAgent"), \
+             patch("agents.zeus.HadesAgent"), patch("agents.zeus.ArtemisAgent"), \
+             patch("agents.zeus.PythiaAgent"), patch("agents.zeus.AresMockAgent"), \
+             patch("agents.zeus.ArgusAgent"), patch("agents.zeus.RedisBridge"), \
+             patch("agents.zeus.SeniorityEvaluator"), patch("agents.zeus.Watchdog.start"), \
+             patch("agents.zeus.ZeusOrchestrator._run_seniority_evaluation"), \
+             patch("agents.zeus.anthropic.Anthropic"), \
+             patch("config.settings.load_settings",
+                   return_value={"account_equity": 4000.0, "mock_execution": True}):
+            zeus = ZeusOrchestrator(cfg)
+        state = MagicMock()
+        state.total_equity = live_equity
+        zeus.argus.portfolio_state.return_value = state
+        return zeus
+
+    def test_prefers_live_equity(self):
+        zeus = self._zeus_with_argus_equity(5000.0)
+        assert zeus._budget_equity() == 5000.0   # gains reflected, not config 4000
+
+    def test_falls_back_to_config_when_zero(self):
+        zeus = self._zeus_with_argus_equity(0.0)
+        assert zeus._budget_equity() == 4000.0   # Argus not refreshed → config
+
+    def test_falls_back_to_config_on_error(self):
+        zeus = self._zeus_with_argus_equity(5000.0)
+        zeus.argus.portfolio_state.side_effect = RuntimeError("IB down")
+        assert zeus._budget_equity() == 4000.0   # never raises

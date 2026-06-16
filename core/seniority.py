@@ -455,16 +455,32 @@ class SeniorityEvaluator:
         return ok
 
     def _clear_hades(self, score: AgentScore) -> bool:
-        ofac_file = Path("agents/hades.py")
-        has_ofac = (
-            ofac_file.exists()
-            and "ofac" in ofac_file.read_text(encoding="utf-8", errors="ignore").lower()
-        )
-        if has_ofac:
+        # Real runtime evidence: has Hades actually killed signals at the
+        # compliance stage? (Was a source grep for the string 'ofac'.) When
+        # Supabase is unavailable, fall back to the source presence check so
+        # offline/SQLite dev still works — but never count "can't measure" as a
+        # pass: an unreadable count fails the gate.
+        active = None
+        if self._use_supabase:
+            try:
+                import core.supabase_client as supa
+                n = supa.count_hades_compliance_kills()
+                if n is not None:
+                    active = n >= 1
+            except Exception:
+                active = None
+        if active is None:
+            ofac_file = Path("agents/hades.py")
+            active = (
+                ofac_file.exists()
+                and "ofac" in ofac_file.read_text(encoding="utf-8", errors="ignore").lower()
+            )
+        if active:
             score.passed("ofac_esg_lksg_compliance_active")
         else:
-            score.failed("ofac_esg_lksg_compliance_active", "OFAC logic missing from hades.py")
-        return has_ofac
+            score.failed("ofac_esg_lksg_compliance_active",
+                         "no compliance kills recorded / OFAC logic missing")
+        return bool(active)
 
     def _clear_icarus(self, score: AgentScore) -> bool:
         ticker_map_size = self._ticker_map_size()

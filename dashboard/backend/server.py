@@ -36,6 +36,38 @@ load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 logger = logging.getLogger("dashboard")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
 
+
+def binding_constraint(stage: str | None, reason: str | None) -> str | None:
+    """Derive WHICH specific rule bound a killed signal, from (stage, reason).
+    Pure observability — the dashboard shows this per kill so the next debug
+    cycle is faster than reading raw kill_reason text."""
+    if not stage:
+        return None
+    r = (reason or "").lower()
+    if stage == "hades":
+        return "sanctions" if ("ofac" in r or "sanction" in r) else "compliance_block"
+    if stage in ("trend", "artemis"):
+        if "unavailable" in r:        return "macro_unavailable"
+        if "extreme" in r or "vix" in r: return "vix_extreme"
+        return "bear_regime"
+    if stage == "pattern" or stage == "pythia":
+        return "tier_blocked_at_seed" if "tier" in r or "stage" in r else "cold_start_low_conf"
+    if stage == "concentration":
+        if "cooldown" in r:  return "cooldown"
+        if "sector"   in r:  return "sector_cap"
+        if "open position" in r or "cap" in r: return "ticker_cap"
+        return "global_cap"
+    if stage == "zeus":
+        if "budget"     in r:                       return "budget"
+        if "quality"    in r:                       return "reasoning_quality"
+        if "confidence" in r or "floor" in r:       return "confidence_below_floor"
+        if "senior" in r:                           return "seniority_cap"
+        # "ZEUS LLM reasoning rejected trade" etc. = the Director's low-confidence
+        # veto, not the anti-spam reasoning-length check.
+        return "confidence_below_floor"
+    return stage  # unknown stage — surface it verbatim
+
+
 app = FastAPI(title="Pantheon OS Dashboard", version="1.0.0")
 
 app.add_middleware(
@@ -153,6 +185,7 @@ async def _run_pipeline_cycle() -> dict:
                     "stage":   run.killed_at_stage,
                     "reason":  run.kill_reason,
                     "supplier": raw_signal.supplier,
+                    "binding_constraint": binding_constraint(run.killed_at_stage, run.kill_reason),
                 })
             elif run.trade_result and run.trade_result.symbol:
                 bus.record("trade_placed", {

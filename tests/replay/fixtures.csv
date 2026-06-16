@@ -1,0 +1,10 @@
+signal_id,headline,category,severity,tickers,supplier,vix,price,expected_stage,note
+S001,RUSAL supply chain update,positive_news,3,AAPL,RUSAL,18.0,150.0,hades,OFAC sanctioned supplier — must die at Hades
+S002,Sberbank credit expansion,positive_news,3,AAPL,Sberbank,18.0,150.0,hades,OFAC sanctioned supplier — must die at Hades
+S003,Big tech earnings beat,earnings_surprise,3,MSFT,TestCorp,40.0,150.0,trend,Extreme VIX must suppress at Artemis
+S004,Regulatory action announced,regulatory_action,3,GOOGL,TestCorp,40.0,150.0,trend,Extreme VIX must suppress at Artemis
+S005,SAP record revenue quarter,positive_news,3,SAP,TestCorp,18.0,150.0,,Clean signal — distinct ticker reaches execution
+S006,Apple partnership announced,positive_news,3,AAPL,TestCorp,18.0,200.0,,Clean signal — distinct ticker reaches execution
+S007,NVIDIA beats estimates,earnings_surprise,3,NVDA,TestCorp,18.0,150.0,,First NVDA approval — concentration cap permits one
+S008,NVIDIA new GPU launch,positive_news,3,NVDA,TestCorp,18.0,150.0,concentration,Second NVDA in same run — concentration must kill
+S009,TSMC fab fire — production halted,supplier_disruption,3,TSM,TSMC,18.0,100.0,,Disruption signal — clean SELL path with distinct ticker
