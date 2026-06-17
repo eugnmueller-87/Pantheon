@@ -29,9 +29,10 @@ function useClassicData(metrics) {
   const dbPositions = usePositions()
 
   return useMemo(() => {
-    const m = metrics
-    const eqVal = m.equity
-    const positions = m.openPositions
+    // Defensive: never let a transient undefined metrics blank the whole app.
+    const m = metrics || {}
+    const eqVal = m.equity ?? 0
+    const positions = m.openPositions || []
 
     // Equity area + per-snapshot delta bars (Balance line / Income bars in ref).
     const series = (equity || []).slice(-60).map(r => ({
@@ -44,10 +45,12 @@ function useClassicData(metrics) {
     }))
 
     // Shared realized-€ figures (one formula, one source — see useMetrics).
-    const profitToday = m.realizedToday
-    const profit7d = m.realized7d
+    const profitToday = m.realizedToday ?? 0
+    const profit7d = m.realized7d ?? 0
     const pct7d = eqVal ? (profit7d / eqVal) * 100 : 0
-    const unrealized = m.unrealized
+    const unrealized = m.unrealized ?? 0
+    const tradeEur = m.tradeEur || (() => 0)
+    const closedTrades = m.closed || []
 
     // Most traded symbol today (view-specific).
     const today = new Date().toISOString().slice(0, 10)
@@ -66,9 +69,9 @@ function useClassicData(metrics) {
       .filter(p => p.value > 0)
       .sort((a, b) => b.value - a.value)
 
-    // Top performers — same closed set + same € formula (m.tradeEur) as the KPIs.
+    // Top performers — same closed set + same € formula (tradeEur) as the KPIs.
     const bySym = {}
-    m.closed.forEach(t => { bySym[t.symbol] = (bySym[t.symbol] || 0) + m.tradeEur(t) })
+    closedTrades.forEach(t => { bySym[t.symbol] = (bySym[t.symbol] || 0) + tradeEur(t) })
     const performers = Object.entries(bySym)
       .map(([name, pnl]) => ({ name, pnl: +pnl.toFixed(2) }))
       .sort((a, b) => b.pnl - a.pnl)
@@ -87,7 +90,7 @@ function useClassicData(metrics) {
     return {
       eqVal, withIncome, profitToday, profit7d, pct7d, unrealized,
       mostTraded, tradesToday: todays.length, pie, totalNotional, performers, last,
-      totalTrades: perf?.total_trades ?? (trades || []).length,
+      totalTrades: m.totalTrades ?? (trades || []).length,
       profitIsEstimated,
     }
   }, [trades, equity, dbPositions, metrics])
