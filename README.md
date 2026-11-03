@@ -3,9 +3,9 @@
 *An engineering study in coordinating 8 autonomous agents under a single orchestrator — built and exercised in the trading domain because it forces the hard problems: strict data contracts, fault isolation, graceful degradation, and non-negotiable safety limits.*
 
 ![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=flat&logo=python&logoColor=white)
-![Tests](https://img.shields.io/badge/Tests-356%20passing-brightgreen?style=flat)
+![Tests](https://img.shields.io/badge/Tests-485%20passing-brightgreen?style=flat)
 ![CI](https://img.shields.io/badge/CI%2FCD-GitHub%20Actions-2088FF?style=flat&logo=githubactions&logoColor=white)
-![Status](https://img.shields.io/badge/Status-Paper%20Trading-orange?style=flat)
+![Status](https://img.shields.io/badge/Status-offline%20%28paper%20only%29-lightgrey?style=flat)
 ![Broker](https://img.shields.io/badge/Broker-Interactive%20Brokers-red?style=flat)
 ![Alerts](https://img.shields.io/badge/Alerts-Telegram-26A5E4?style=flat&logo=telegram&logoColor=white)
 ![Docker](https://img.shields.io/badge/Docker-GHCR-2496ED?style=flat&logo=docker&logoColor=white)
@@ -14,6 +14,8 @@
 ![Grafana](https://img.shields.io/badge/Monitoring-Grafana-F46800?style=flat&logo=grafana&logoColor=white)
 ![Cloudflare](https://img.shields.io/badge/CDN-Cloudflare%20Pages-F38020?style=flat&logo=cloudflare&logoColor=white)
 ![FRED](https://img.shields.io/badge/Macro-FRED%20API-003087?style=flat)
+
+> **Status, November 2026:** offline. It ran on Hetzner against an IBKR paper account; the last macro snapshot is from 17 June 2026. Code and tests are current: 485 passed on 03.11.2026.
 
 > **An 8-agent pipeline coordinated by a single orchestrator (ZEUS), deployed on Hetzner and self-scheduling every 15 minutes.** The interesting part is the *engineering*: one owner of control flow, agents that never call each other, a single typed data contract between stages, per-agent circuit breakers, a health watchdog, and hard kill-switches at every stage. Trading is the proving ground — **paper trading only, no real money at risk** (see [Scope & Safety](#scope--safety)). Signal production is a separate, decoupled container with its own failure domain.
 
@@ -155,7 +157,7 @@ Icarus polls that table every pipeline cycle. When Zeus processes a signal it is
 Every push to `main`:
 
 ```
-test (356 passing) → build → push to GHCR → SSH deploy to Hetzner → Cloudflare Pages (frontend)
+test (485 passing) → build → push to GHCR → SSH deploy to Hetzner → Cloudflare Pages (frontend)
 ```
 
 The deployed compose file is `infra/hetzner/docker-compose.prod.yml`. The root `docker-compose.prod.yml` is a local-build variant (for manual VPS runs). Edit `infra/hetzner/` for all production changes.
@@ -227,7 +229,7 @@ IB_PAPER_PORT=4002
 
 ```bash
 pytest tests/ -q
-# 356 tests, all green
+# 485 tests, all green
 ```
 
 ### 4. Produce signals (run once to seed, then runs every 30 min in prod)
@@ -353,7 +355,7 @@ ZEUS/
 ├── knowledge/
 │   ├── agents/                  # Per-agent Senior IC skills files
 │   └── *.md                     # Trading fundamentals, macro playbooks
-├── tests/                       # 356 tests — full pipeline coverage
+├── tests/                       # 485 tests — full pipeline coverage
 └── .github/workflows/deploy.yml # CI/CD pipeline
 ```
 
