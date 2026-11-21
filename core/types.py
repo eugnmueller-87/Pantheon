@@ -86,6 +86,7 @@ class RawSignal:
     reward_risk:     Optional[float]   = None    # take-profit = stop_distance × this
     reference_price: Optional[float]   = None    # last close the setup was computed on
     strategy:        str               = ""      # e.g. "breakout" | "mean_reversion"
+    atr:             Optional[float]   = None    # ATR at the setup bar (trailing-stop unit)
 
 
 # ---------------------------------------------------------------------------
@@ -126,6 +127,10 @@ class FilteredSignal:
     def reward_risk(self) -> Optional[float]:   return self.original.reward_risk
     @property
     def reference_price(self) -> Optional[float]: return self.original.reference_price
+    @property
+    def strategy(self) -> str:                    return self.original.strategy
+    @property
+    def atr(self) -> Optional[float]:             return self.original.atr
 
 
 # ---------------------------------------------------------------------------
@@ -187,6 +192,10 @@ class SizedSignal:
     def reward_risk(self) -> Optional[float]:   return self.original.reward_risk
     @property
     def reference_price(self) -> Optional[float]: return self.original.reference_price
+    @property
+    def strategy(self) -> str:                    return self.original.strategy
+    @property
+    def atr(self) -> Optional[float]:             return self.original.atr
 
 
 # ---------------------------------------------------------------------------

@@ -444,6 +444,10 @@ class CTraderAdapter:
             raise BrokerConfigError(
                 f"ctrader.risk_per_trade_pct={risk_per_trade_pct} outside (0, 0.05] — refusing to start"
             )
+        # Highest risk fraction size_order_risk() accepts. Equals
+        # risk_per_trade_pct unless the (opt-in) risk ramp raises it via
+        # set_risk_ceiling(); never above 5%.
+        self.max_risk_per_trade_pct = self.risk_per_trade_pct
         self.max_min_lot_risk_overshoot = float(max_min_lot_risk_overshoot)
         self.entry_order_type   = entry_order_type.upper()
         self.request_timeout    = request_timeout
@@ -896,13 +900,15 @@ class CTraderAdapter:
     ) -> RiskSizing:
         """Risk-based sizing: lose ≈ equity × risk_pct if the stop is hit.
 
-        risk_pct defaults to (and is clamped at) risk_per_trade_pct. Fails
+        risk_pct defaults to risk_per_trade_pct and is clamped at
+        max_risk_per_trade_pct (== risk_per_trade_pct unless the opt-in risk
+        ramp raised it with set_risk_ceiling). Fails
         closed (BrokerRejectedError) on a missing conversion pair, a min lot
         beyond the risk tolerance, or a min lot beyond the ESMA cap.
         """
         inst = self._instrument(symbol)
         spec = self._spec(self._symbol_id(symbol))
-        pct  = self.risk_per_trade_pct if risk_pct is None else min(float(risk_pct), self.risk_per_trade_pct)
+        pct  = self.risk_per_trade_pct if risk_pct is None else min(float(risk_pct), self.max_risk_per_trade_pct)
         q2a  = self.quote_to_account_rate(inst.quote_ccy)   # raises when the pair is missing
         sizing = compute_risk_volume(
             equity=self.account_equity, risk_pct=pct, entry=entry, stop=stop_loss,
@@ -920,6 +926,20 @@ class CTraderAdapter:
         )
         return sizing
 
+    def set_risk_ceiling(self, pct: float) -> None:
+        """Risk ramp hook: allow size_order_risk() up to `pct` (never > 5%,
+        never below risk_per_trade_pct)."""
+        pct = float(pct)
+        if not self.risk_per_trade_pct <= pct <= 0.05:
+            raise BrokerConfigError(
+                f"risk ceiling {pct} must be in [risk_per_trade_pct {self.risk_per_trade_pct}, 0.05]")
+        self.max_risk_per_trade_pct = pct
+        logger.info("[CTRADER] Risk ceiling set to %.2f%% (base %.2f%%)", pct * 100, self.risk_per_trade_pct * 100)
+
+    def leverage_cap_for(self, symbol: str) -> float:
+        """ESMA (or tighter settings) leverage cap of the symbol's asset class."""
+        return self._instrument(symbol).leverage_cap
+
     # ── orders ──────────────────────────────────────────────────────────────
 
     def place_bracket(
@@ -929,19 +949,28 @@ class CTraderAdapter:
         qty: float,
         entry: float,
         stop_loss: float,
-        take_profit: float,
+        take_profit: Optional[float],
         exchange: Optional[str] = None,
         order_type: Optional[str] = None,
     ) -> BracketResult:
+        """take_profit=None places the entry with a stop-loss only (used when a
+        trailing stop runs with use_fixed_target=False); the SL is mandatory."""
         _, msgs, model = _pb()
         self._require_session()
         side = side.upper()
         if side not in ("BUY", "SELL"):
             raise BrokerRejectedError(f"Invalid side {side!r}")
+        if stop_loss is None:
+            raise BrokerRejectedError("cTrader bracket needs a stop-loss")
         is_long = side == "BUY"
-        if is_long and not (stop_loss < entry < take_profit):
+        if take_profit is None:
+            if is_long and not stop_loss < entry:
+                raise BrokerRejectedError(f"BUY needs SL < entry (got {stop_loss}/{entry})")
+            if not is_long and not entry < stop_loss:
+                raise BrokerRejectedError(f"SELL needs entry < SL (got {entry}/{stop_loss})")
+        elif is_long and not (stop_loss < entry < take_profit):
             raise BrokerRejectedError(f"BUY bracket needs SL < entry < TP (got {stop_loss}/{entry}/{take_profit})")
-        if not is_long and not (take_profit < entry < stop_loss):
+        elif not is_long and not (take_profit < entry < stop_loss):
             raise BrokerRejectedError(f"SELL bracket needs TP < entry < SL (got {take_profit}/{entry}/{stop_loss})")
 
         sid    = self._symbol_id(symbol)
@@ -966,16 +995,18 @@ class CTraderAdapter:
             kwargs.update(
                 orderType=model.ProtoOAOrderType.Value("MARKET"),
                 relativeStopLoss=relative_distance(entry, stop_loss, spec.digits),
-                relativeTakeProfit=relative_distance(entry, take_profit, spec.digits),
             )
+            if take_profit is not None:
+                kwargs["relativeTakeProfit"] = relative_distance(entry, take_profit, spec.digits)
         elif otype == "LIMIT":
             kwargs.update(
                 orderType=model.ProtoOAOrderType.Value("LIMIT"),
                 limitPrice=round(entry, spec.digits),
                 stopLoss=round(stop_loss, spec.digits),
-                takeProfit=round(take_profit, spec.digits),
                 timeInForce=model.ProtoOATimeInForce.Value("GOOD_TILL_CANCEL"),
             )
+            if take_profit is not None:
+                kwargs["takeProfit"] = round(take_profit, spec.digits)
         else:
             raise BrokerConfigError(f"Unsupported ctrader entry order type {otype!r} (MARKET|LIMIT)")
 
@@ -989,12 +1020,51 @@ class CTraderAdapter:
         return BracketResult(
             order_id=str(order.orderId), symbol=self._logical_or(symbol), side=side,
             qty=volume_to_units(volume), entry_price=fill,
-            stop_loss_price=round(stop_loss, spec.digits), take_profit_price=round(take_profit, spec.digits),
+            stop_loss_price=round(stop_loss, spec.digits),
+            take_profit_price=round(take_profit, spec.digits) if take_profit is not None else None,
             status=status,
             raw={"position_id": str(order.positionId) if order.positionId else None,
                  "client_order_id": client_order_id, "volume": volume, "order_type": otype,
                  "execution_type": exec_type},
         )
+
+    def modify_position_sltp(
+        self,
+        position_id: Any,
+        stop_loss: float,
+        take_profit: Optional[float] = None,
+        symbol: Optional[str] = None,
+    ) -> None:
+        """Amend an open position's protection (ProtoOAAmendPositionSLTPReq).
+
+        cTrader REPLACES both levels on amend: take_profit=None removes any TP,
+        so callers that keep a fixed target must pass it again. Prices are
+        rounded to the symbol's digits when `symbol` is given. Raises
+        BrokerRejectedError when the venue rejects the amend.
+        """
+        _, msgs, model = _pb()
+        self._require_session()
+        if stop_loss is None:
+            raise BrokerRejectedError("refusing to amend a position without a stop-loss")
+        digits = self._spec(self._symbol_id(symbol)).digits if symbol else None
+
+        def _r(px: float) -> float:
+            return round(float(px), digits) if digits is not None else float(px)
+
+        kwargs: dict[str, Any] = dict(
+            ctidTraderAccountId=self.creds.account_id, positionId=int(position_id), stopLoss=_r(stop_loss),
+        )
+        if take_profit is not None:
+            kwargs["takeProfit"] = _r(take_profit)
+        res = self._call(msgs.ProtoOAAmendPositionSLTPReq(**kwargs))
+        exec_type = model.ProtoOAExecutionType.Name(res.executionType) if _has(res, "executionType") else ""
+        if exec_type in ("ORDER_REJECTED", "ORDER_CANCELLED", "ORDER_EXPIRED") or _payload_name(res) in (
+                "ProtoOAOrderErrorEvent", "ProtoOAErrorRes"):
+            raise BrokerRejectedError(
+                f"cTrader amend SL/TP of position {position_id} rejected "
+                f"({exec_type or _payload_name(res)} errorCode={getattr(res, 'errorCode', '')})")
+        logger.info("[CTRADER] Amended position %s SL=%s TP=%s", position_id, kwargs["stopLoss"],
+                    kwargs.get("takeProfit", "none"))
 
     def _logical_or(self, symbol: str) -> str:
         return self.resolve_symbol(symbol) or symbol.upper()
@@ -1065,6 +1135,9 @@ class CTraderAdapter:
             out.append(BrokerPosition(
                 symbol=name, side="LONG" if is_long else "SHORT", qty=units,
                 avg_cost=avg, current_price=cur, unrealized_pnl=pnl,
+                position_id=str(p.positionId) if _has(p, "positionId") else None,
+                stop_loss=float(p.stopLoss) if _has(p, "stopLoss") else None,
+                take_profit=float(p.takeProfit) if _has(p, "takeProfit") else None,
             ))
         return out
 

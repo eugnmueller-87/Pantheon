@@ -579,12 +579,18 @@ class IcarusAgent:
             from core.fx_signals import FxSignalGenerator
             self._fx_generator = FxSignalGenerator()
         signals: list[RawSignal] = []
+        stats = getattr(self._fx_generator, "stats", None)
         for sig in self._fx_generator.generate():
             if self._is_seen(sig.signal_id):
                 logger.debug("[ICARUS] FX setup %s already emitted — skipping", sig.signal_id)
+                if stats is not None:
+                    stats.reclassify_fired("icarus", "already emitted this bar")
                 continue
             self._mark_seen(sig.signal_id)
             signals.append(sig)
+        if stats is not None:
+            # e.g. "[ICARUS] signals: fired=1 skipped=5 (outside session=2, no breakout=2, ...)"
+            stats.log_summary(logger, "icarus", "[ICARUS]")
         logger.info("[ICARUS] %d new FX/index signal(s) ready for Zeus.", len(signals))
         return signals
 

@@ -241,6 +241,31 @@ class PythiaAgent:
             logger.warning("[PYTHIA] closed-trade count failed (%s) — pausing exploration", exc)
             return _EXPLORATION_TRADES  # treat as budget-exhausted, fail safe
 
+    def closed_trade_outcomes(self, limit: int = 500) -> list[float]:
+        """pnl_pct of closed (outcome-known) trades, oldest → newest, at most
+        `limit` most recent. Feeds the opt-in risk ramp (Ares/ZEUS). Returns []
+        on any storage error so the ramp falls back to base risk."""
+        try:
+            if self._use_supabase:
+                import core.supabase_client as supa
+                rows = supa.get_client().table("trades") \
+                    .select("pnl_pct,recorded_at") \
+                    .not_.is_("pnl_pct", "null") \
+                    .order("recorded_at", desc=True) \
+                    .limit(limit) \
+                    .execute()
+                vals = [float(r["pnl_pct"]) for r in (rows.data or []) if r.get("pnl_pct") is not None]
+                return list(reversed(vals))
+            with sqlite3.connect(self.db_path) as conn:
+                rows = conn.execute(
+                    "SELECT pnl_pct FROM trades WHERE pnl_pct IS NOT NULL AND hit IS NOT NULL "
+                    "ORDER BY recorded_at DESC, id DESC LIMIT ?", (int(limit),),
+                ).fetchall()
+            return [float(r[0]) for r in reversed(rows)]
+        except Exception as exc:
+            logger.warning("[PYTHIA] closed-trade outcomes unavailable (%s) — risk ramp stays at base", exc)
+            return []
+
     # ── SQLite fallback ────────────────────────────────────────────────────────
 
     def _init_db(self) -> None:

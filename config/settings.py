@@ -52,6 +52,20 @@ _DEFAULTS: dict[str, Any] = {
         # max_deployed_pct check, which is meaningless for risk-sized CFDs):
         # sum of open-trade risk + this trade's risk must stay <= this × equity.
         "max_open_risk_pct":     0.03,
+        # Optional risk ramp (core/trade_management.RiskRamp). DISABLED by default:
+        # risk stays at risk_per_trade_pct. When enabled, risk steps up to
+        # risk_ramp_high_pct only after risk_ramp_min_trades closed trades whose
+        # MEAN pnl_pct (the last risk_ramp_min_trades of them) is > 0, and drops
+        # back to risk_per_trade_pct after a risk_ramp_drawdown_revert_pct
+        # drawdown from peak equity (or if that expectancy turns <= 0). Upstream
+        # caps (Pythia / ZEUS / seniority) can still only LOWER the risk.
+        # Env CTRADER_RISK_RAMP=true|false overrides "enabled".
+        "risk_ramp": {
+            "enabled":                       False,
+            "risk_ramp_high_pct":            0.02,
+            "risk_ramp_min_trades":          50,
+            "risk_ramp_drawdown_revert_pct": 0.10,
+        },
         # LEGACY notional mode only: leverage applied to notional sizing. 1.0 =
         # unlevered. Clamped to the ESMA caps below.
         "sizing_leverage":       1.0,
@@ -115,6 +129,31 @@ _DEFAULTS: dict[str, Any] = {
             "allow_short":       True,
             "session":           "any",   # weekdays only
             "max_bar_age_hours": 96,      # ignore stale data (covers a weekend)
+            # Trade management (core/trade_management.py) — both DISABLED by default.
+            # trailing_stop: after +trail_activation_R, trail the stop at
+            #   trail_atr_multiple × ATR — style "atr" (from the latest price) or
+            #   "chandelier" (from the best price since entry). Only ever tightens.
+            #   use_fixed_target=False drops the fixed reward_risk TP so winners run
+            #   (only honoured while enabled=True). Env CTRADER_TRAILING_BREAKOUT=true|false.
+            "trailing_stop": {
+                "enabled":            False,
+                "style":              "atr",     # "atr" | "chandelier"
+                "trail_activation_R": 1.0,
+                "trail_atr_multiple": 3.0,
+                "use_fixed_target":   True,
+            },
+            # pyramiding: add to a WINNER only — at >= pyramid_trigger_R beyond the
+            #   last entry, first move the stop to break-even (+ breakeven_buffer_R × R
+            #   in the trade's favour), then add one leg risking at most
+            #   ctrader.risk_per_trade_pct. Never on 0R / losers. Account + symbol open
+            #   risk <= ctrader.max_open_risk_pct, ESMA and min-lot rules unchanged.
+            #   Env CTRADER_PYRAMID_BREAKOUT=true|false.
+            "pyramiding": {
+                "enabled":            False,
+                "pyramid_trigger_R":  1.0,
+                "pyramid_max_adds":   2,
+                "breakeven_buffer_R": 0.0,
+            },
         },
         # FX majors — z-score mean reversion vs SMA with session + volatility filters, hourly bars.
         "mean_reversion": {
@@ -135,6 +174,31 @@ _DEFAULTS: dict[str, Any] = {
             # Europe/London and America/New_York local time (DST-correct).
             "session":           "london_ny_overlap",
             "max_bar_age_hours": 3,
+            # Trade management (core/trade_management.py) — both DISABLED by default.
+            # trailing_stop: after +trail_activation_R, trail the stop at
+            #   trail_atr_multiple × ATR — style "atr" (from the latest price) or
+            #   "chandelier" (from the best price since entry). Only ever tightens.
+            #   use_fixed_target=False drops the fixed reward_risk TP so winners run
+            #   (only honoured while enabled=True). Env CTRADER_TRAILING_MEAN_REVERSION=true|false.
+            "trailing_stop": {
+                "enabled":            False,
+                "style":              "atr",     # "atr" | "chandelier"
+                "trail_activation_R": 1.0,
+                "trail_atr_multiple": 2.0,
+                "use_fixed_target":   True,
+            },
+            # pyramiding: add to a WINNER only — at >= pyramid_trigger_R beyond the
+            #   last entry, first move the stop to break-even (+ breakeven_buffer_R × R
+            #   in the trade's favour), then add one leg risking at most
+            #   ctrader.risk_per_trade_pct. Never on 0R / losers. Account + symbol open
+            #   risk <= ctrader.max_open_risk_pct, ESMA and min-lot rules unchanged.
+            #   Env CTRADER_PYRAMID_MEAN_REVERSION=true|false.
+            "pyramiding": {
+                "enabled":            False,
+                "pyramid_trigger_R":  1.0,
+                "pyramid_max_adds":   2,
+                "breakeven_buffer_R": 0.0,
+            },
         },
     },
     # IBKR

@@ -259,6 +259,12 @@ class ZeusOrchestrator:
         self.broker: Optional[BrokerAdapter] = None
         if not self.config.mock_execution and self.config.broker == "ctrader":
             self.broker = self._build_ctrader_broker()
+        # Trade management (trailing / pyramiding / risk ramp) — cTrader only,
+        # every feature OFF by default (core/trade_management.py).
+        self._trade_mgmt = None
+        if self.config.broker == "ctrader" and not self.config.mock_execution:
+            from core.trade_management import load_trade_management_config
+            self._trade_mgmt = load_trade_management_config(_s)
 
         self.ares      = (
             AresMockAgent(
@@ -280,6 +286,7 @@ class ZeusOrchestrator:
                 # Size from the configured risk budget (was silently the 100k default).
                 default_account_equity=self.config.default_account_equity,
                 broker=self.broker,
+                trade_management=self._trade_mgmt,
             )
         )
         self.argus     = ArgusAgent(
@@ -404,7 +411,7 @@ class ZeusOrchestrator:
         per-trade risk budget. Returns a kill reason, or None to proceed.
         """
         from core.brokers.ctrader_instruments import estimate_risk_notional_fraction
-        risk_cfg   = float(self._ctrader_cfg.get("risk_per_trade_pct", 0.01))
+        risk_cfg   = self._current_risk_pct()
         max_open   = float(self._ctrader_cfg.get("max_open_risk_pct", 0.03))
         trade_risk = min(risk_cfg, float(sized.position_size_pct))
         open_n     = self.argus.open_position_count()
@@ -423,6 +430,53 @@ class ZeusOrchestrator:
                 f"this trade {trade_risk:.2%} > cap {max_open:.2%} of €{equity:,.0f}"
             )
         return None
+
+    def _current_risk_pct(self) -> float:
+        """Per-trade risk on the cTrader path: ctrader.risk_per_trade_pct, or
+        the (opt-in) risk-ramp level Ares currently applies."""
+        base = float((getattr(self, "_ctrader_cfg", None) or {}).get("risk_per_trade_pct", 0.01))
+        ares = getattr(self, "ares", None)
+        ramp = getattr(ares, "risk_ramp", None) if ares is not None else None
+        if ramp is not None and getattr(ramp, "enabled", False):
+            return max(base, float(ramp.current_pct))
+        return base
+
+    def _update_risk_ramp(self) -> None:
+        """Feed the opt-in risk ramp: Pythia's closed-trade pnl_pct + Argus equity.
+        No-op unless Ares has an enabled ramp."""
+        ramp = getattr(getattr(self, "ares", None), "risk_ramp", None)
+        if ramp is None or not getattr(ramp, "enabled", False):
+            return
+        try:
+            outcomes = self.pythia.closed_trade_outcomes()
+            state = self.argus.portfolio_state()
+            self.ares.update_risk_ramp(outcomes, equity=state.total_equity, peak_equity=state.peak_equity)
+        except Exception as exc:
+            logger.warning("[ZEUS] risk ramp update failed (%s) — keeping %.2f%%", exc, ramp.current_pct * 100)
+
+    def _manage_positions(self) -> list[dict]:
+        """Trailing-stop / pyramid pass (cTrader, opt-in). Only while RUNNING,
+        never in mock_execution; adds respect the seniority size ceiling."""
+        ares = getattr(self, "ares", None)
+        manage = getattr(ares, "manage_open_positions", None)
+        if (self.status != PipelineStatus.RUNNING or self.config.mock_execution
+                or not callable(manage) or not isinstance(getattr(ares, "managed_plans", None), dict)
+                or not ares.managed_plans):
+            return []
+        ceiling = self._seniority_report.max_position_pct if getattr(self, "_seniority_report", None) else None
+        try:
+            return self.cb.call("ares", fn=lambda: manage(risk_ceiling_pct=ceiling), fallback=[]) or []
+        except Exception as exc:
+            logger.warning("[ZEUS] position management failed (non-fatal): %s", exc)
+            return []
+
+    def _log_cycle_stats(self) -> None:
+        from core.signal_stats import SIGNAL_STATS
+        for source, prefix, what, label in (("zeus", "[ZEUS]", "gates", "passed"),
+                                              ("ares", "[ARES]", "execution", "placed"),
+                                              ("pyramid", "[ARES]", "pyramid", "added")):
+            if SIGNAL_STATS.has_activity(source):
+                SIGNAL_STATS.log_summary(logger, source, prefix, what=what, fired_label=label)
 
     def _budget_equity(self) -> float:
         """Equity the budget cap is computed against. Prefer LIVE equity from
@@ -449,6 +503,11 @@ class ZeusOrchestrator:
             logger.warning("[ZEUS] Pipeline is %s — skipping run.", self.status.value)
             return []
 
+        from core.signal_stats import SIGNAL_STATS
+        for _src in ("zeus", "ares", "pyramid"):
+            SIGNAL_STATS.begin_cycle(_src)
+        self._update_risk_ramp()
+
         # Fetch signals directly from Icarus (Supabase)
         raw_signals = self.cb.call("icarus", fn=self.icarus.fetch, fallback=[])
         logger.info("[ZEUS] Icarus returned %d signal(s).", len(raw_signals))
@@ -462,6 +521,10 @@ class ZeusOrchestrator:
             runs.append(run)
 
         self.cb.call("argus", fn=self.argus.refresh, fallback=None)
+        # Trailing stops / pyramid adds AFTER Argus: a drawdown kill or /halt
+        # this cycle sets status != RUNNING and skips management entirely.
+        self._manage_positions()
+        self._log_cycle_stats()
         return runs
 
     def run_research_cycle(self, historical: bool = False) -> dict:
@@ -755,6 +818,8 @@ class ZeusOrchestrator:
             # RISKED at the stop, not a notional fraction — check risk, not notional.
             risk_kill = self._check_risk_budget(sized, equity)
             if risk_kill:
+                from core.signal_stats import SIGNAL_STATS
+                SIGNAL_STATS.skipped("zeus", risk_kill, category="risk cap")
                 trace.killed_at_stage = "zeus"
                 trace.kill_reason     = risk_kill
                 logger.info("[ZEUS] Trade rejected on risk budget — %s", risk_kill)

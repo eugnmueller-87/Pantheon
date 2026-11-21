@@ -64,7 +64,7 @@ class BracketResult:
     qty:               float            # instrument units (shares for IBKR, units for cTrader)
     entry_price:       float
     stop_loss_price:   float
-    take_profit_price: float
+    take_profit_price: Optional[float]  # None → no take-profit was placed
     status:            str              = "submitted"
     raw:               dict[str, Any]   = field(default_factory=dict)
 
@@ -78,6 +78,10 @@ class BrokerPosition:
     avg_cost:       float
     current_price:  float
     unrealized_pnl: float
+    # Optional venue details (cTrader fills them; IBKR leaves the defaults).
+    position_id:    Optional[str]   = None
+    stop_loss:      Optional[float] = None
+    take_profit:    Optional[float] = None
 
 
 # ---------------------------------------------------------------------------
@@ -121,7 +125,7 @@ class BrokerAdapter(Protocol):
         qty: float,
         entry: float,
         stop_loss: float,
-        take_profit: float,
+        take_profit: Optional[float],      # None only on cTrader with trailing + no fixed target
         exchange: Optional[str] = None,
     ) -> BracketResult: ...
 
@@ -133,3 +137,14 @@ class BrokerAdapter(Protocol):
     def closing_fills(self) -> dict[str, list[dict]]:
         """symbol -> [{price, qty, time}] of closing executions, oldest-first
         (format consumed by core.shadow_learning.OutcomeResolver)."""
+
+    # Optional trade-management hooks (NOT part of the runtime-checked protocol,
+    # so IbkrAdapter needs none of them). Ares feature-detects them with getattr
+    # and only uses them on the cTrader path when trailing / pyramiding is on:
+    #
+    #   modify_position_sltp(position_id, stop_loss, take_profit=None, symbol=None) -> None
+    #       Amend the working SL (and TP; None = no TP) of an open position.
+    #   leverage_cap_for(symbol) -> float
+    #       ESMA leverage cap of the symbol (pyramid combined-notional check).
+    #   set_risk_ceiling(pct) -> None
+    #       Raise/lower the max risk fraction size_order_risk() accepts (risk ramp).

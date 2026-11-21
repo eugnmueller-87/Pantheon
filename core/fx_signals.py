@@ -33,7 +33,7 @@ distance into units, so a tight FX stop no longer means a tiny position.
 
 No valid setup → nothing is emitted. Nothing here places orders.
 
-Imports only core.types (+ pandas / optional yfinance) — never other agents.
+Imports only core.types / core.signal_stats (+ pandas / optional yfinance) — never other agents.
 """
 
 from __future__ import annotations
@@ -48,6 +48,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from core.signal_stats import SIGNAL_STATS, SignalStats
 from core.types import RawSignal, Severity, SignalCategory
 
 logger = logging.getLogger("icarus.fx")
@@ -376,6 +377,7 @@ def setup_to_raw_signal(setup: Setup) -> RawSignal:
         reward_risk=setup.reward_risk,
         reference_price=setup.entry,
         strategy=setup.strategy,
+        atr=setup.metrics.get("atr"),
     )
 
 
@@ -461,6 +463,7 @@ class FxSignalGenerator:
         source: Optional[BarSource] = None,
         adapter: Any = None,
         clock: Optional[Callable[[], datetime]] = None,
+        stats: Optional[SignalStats] = None,
     ):
         from config.settings import load_settings
         settings = load_settings() if (config is None or instruments is None) else {}
@@ -476,6 +479,9 @@ class FxSignalGenerator:
         self._clock = clock or (lambda: datetime.now(timezone.utc))
         self.source = source or self._default_source(adapter)
         self.last_evaluations: list[Evaluation] = []
+        # Fired / skipped counters (core/signal_stats.py). generate() resets
+        # the "icarus" CYCLE counters; Icarus logs the summary after de-dup.
+        self.stats = stats if stats is not None else SIGNAL_STATS
 
     def _default_source(self, adapter: Any) -> BarSource:
         yf_source = YFinanceBarSource(self.config.get("yfinance_tickers") or {})
@@ -501,6 +507,7 @@ class FxSignalGenerator:
         now = self._clock()
         signals: list[RawSignal] = []
         self.last_evaluations = []
+        self.stats.begin_cycle("icarus")
         for logical in self.instruments:
             strat = self.strategy_for(logical)
             if strat is None:
@@ -511,14 +518,17 @@ class FxSignalGenerator:
             except Exception as exc:
                 logger.warning("[ICARUS] %s bars unavailable from %s: %s", logical, self.source.name, exc)
                 self.last_evaluations.append(Evaluation(logical, strat, skipped=f"data error: {exc}"))
+                self.stats.skipped("icarus", f"data error: {exc}")
                 continue
             ev = self.evaluate(logical, bars, now)
             self.last_evaluations.append(ev)
             if ev.setup is None:
                 logger.info("[ICARUS] %s %s: no setup — %s", logical, strat, ev.skipped)
+                self.stats.skipped("icarus", ev.skipped)
                 continue
             sig = setup_to_raw_signal(ev.setup)
             logger.info("[ICARUS] %s %s %s entry=%g stop_dist=%g — %s", logical, strat, ev.setup.side,
                         ev.setup.entry, ev.setup.stop_distance, ev.setup.reason)
+            self.stats.fired("icarus")
             signals.append(sig)
         return signals

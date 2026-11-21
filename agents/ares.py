@@ -17,6 +17,18 @@ from zoneinfo import ZoneInfo
 from core.agent_knowledge import AgentKnowledgeBase
 from core.broker import BrokerAdapter, BrokerConnectivityError, BrokerRejectedError
 from core.brokers.ibkr import IbkrAdapter
+from core.signal_stats import SIGNAL_STATS, SignalStats
+from core.trade_management import (
+    Leg,
+    PositionPlan,
+    RiskRamp,
+    TradeManagementConfig,
+    is_tighter,
+    pyramid_cap_violation,
+    pyramid_gate,
+    stop_valid_for_price,
+    update_trailing_stop,
+)
 from core.types import AgentHealth, SignalCategory, SizedSignal, TradeResult
 
 # Market timezones — DST-correct via the IANA database (stdlib zoneinfo).
@@ -128,6 +140,8 @@ class AresAgent:
         take_profit_pct: float = 0.06,
         default_account_equity: float = 100_000.0,
         broker: BrokerAdapter | None = None,
+        trade_management: TradeManagementConfig | None = None,
+        stats: SignalStats | None = None,
     ):
         self.paper                  = paper
         self.host                   = host
@@ -141,6 +155,22 @@ class AresAgent:
         )
         self._pending: list[str]    = []   # placed order IDs (for cancel_all_pending)
         self.kb = AgentKnowledgeBase("ares")
+        self.stats = stats if stats is not None else SIGNAL_STATS
+        # Trade management (trailing / pyramiding / risk ramp) — cTrader path
+        # only and all OFF by default. None → loaded lazily from settings the
+        # first time a technical signal is placed on a non-IBKR venue.
+        self._trade_mgmt: TradeManagementConfig | None = trade_management
+        self._plans: dict[str, PositionPlan] = {}   # symbol -> live plan (in-memory)
+        self.risk_ramp: RiskRamp | None = None
+        if trade_management is not None and trade_management.risk_ramp.enabled and self.broker.name != "ibkr":
+            self.risk_ramp = RiskRamp(trade_management.risk_ramp)
+            ceiling = getattr(self.broker, "set_risk_ceiling", None)
+            if callable(ceiling):
+                ceiling(trade_management.risk_ramp.risk_ramp_high_pct)
+            logger.info("[ARES] Risk ramp ENABLED — base %.2f%%, high %.2f%% after %d closed trades",
+                        trade_management.risk_ramp.base_pct * 100,
+                        trade_management.risk_ramp.risk_ramp_high_pct * 100,
+                        trade_management.risk_ramp.risk_ramp_min_trades)
         if self.broker.name == "ibkr":
             logger.info("[ARES] %s mode — IBKR port %d", "PAPER" if paper else "LIVE", self.port)
         else:
@@ -156,6 +186,39 @@ class AresAgent:
             return AgentHealth.HEALTHY if self.broker.health() else AgentHealth.DEGRADED
         except Exception:
             return AgentHealth.DEGRADED
+
+    # ------------------------------------------------------------------
+    # Trade management config / risk ramp (cTrader path, opt-in)
+    # ------------------------------------------------------------------
+
+    @property
+    def trade_management(self) -> TradeManagementConfig | None:
+        """Trailing / pyramiding / ramp config. Never loaded on IBKR."""
+        if self.broker.name == "ibkr":
+            return None
+        if self._trade_mgmt is None:
+            try:
+                from core.trade_management import load_trade_management_config
+                self._trade_mgmt = load_trade_management_config()
+            except Exception as exc:
+                logger.warning("[ARES] trade-management config unavailable (%s) — features off", exc)
+                self._trade_mgmt = TradeManagementConfig()
+        return self._trade_mgmt
+
+    def current_risk_pct(self) -> float:
+        """Per-trade risk fraction before upstream ceilings: the ramp level when
+        the ramp is enabled, else the venue's risk_per_trade_pct."""
+        base = float(getattr(self.broker, "risk_per_trade_pct", 0.01))
+        if self.risk_ramp is not None and self.risk_ramp.enabled:
+            return float(self.risk_ramp.current_pct)
+        return base
+
+    def update_risk_ramp(self, outcomes, equity: float | None = None,
+                         peak_equity: float | None = None) -> float:
+        """Called by ZEUS once per cycle. No-op (base risk) when disabled."""
+        if self.risk_ramp is None:
+            return self.current_risk_pct()
+        return self.risk_ramp.update(outcomes, equity=equity, peak_equity=peak_equity)
 
     # ------------------------------------------------------------------
     # Venue-specific routing
@@ -203,12 +266,16 @@ class AresAgent:
             ib     = self._get_connection()
             result = self._place_bracket(ib, symbol, sized, exchange=exchange)
             self._pending.append(result.order_id)
+            self.stats.fired("ares")
             return result
         except Exception as exc:
             logger.error("[ARES] Order failed: %s", exc)
             if _is_connectivity_error(exc):
+                self.stats.skipped("ares", str(exc), category="queued (broker unreachable)")
                 return self._enqueue(sized, exc)
             # Terminal IB rejection or unknown error — do not queue.
+            cat = self.stats.skipped("ares", str(exc))
+            logger.info("[ARES] %s skipped — %s", symbol, cat)
             return self._error_result(symbol, exc)
 
     # ------------------------------------------------------------------
@@ -314,6 +381,10 @@ class AresAgent:
         if getattr(sized, "stop_distance", None):
             payload["stop_distance"] = sized.stop_distance
             payload["reward_risk"]   = sized.reward_risk
+            # Optional (trade management): which strategy's trailing/pyramid
+            # config applies, and the setup ATR the trail is measured in.
+            payload["strategy"]      = getattr(sized, "strategy", "") or ""
+            payload["atr"]           = getattr(sized, "atr", None)
 
         db.enqueue_pending_order(
             signal_id=sized.signal_id,
@@ -360,6 +431,8 @@ class AresAgent:
             affected_tickers=[symbol],
             stop_distance=payload.get("stop_distance"),
             reward_risk=payload.get("reward_risk"),
+            strategy=payload.get("strategy") or "",
+            atr=payload.get("atr"),
         )
         filtered = FilteredSignal(original=raw, compliance_score=1.0)
         macro = MacroContext(
@@ -389,6 +462,8 @@ class AresAgent:
                 affected_tickers=[symbol],
                 stop_distance=payload.get("stop_distance"),
                 reward_risk=payload.get("reward_risk"),
+                strategy=payload.get("strategy") or "",
+                atr=payload.get("atr"),
             )
         # Reconcile re-uses the exchange that was active when the order was queued.
         # The symbol in the payload is already the exchange-specific ticker (e.g. SIE.DE).
@@ -428,12 +503,19 @@ class AresAgent:
         decimals = self.broker.price_decimals(symbol)
 
         signal_stop = getattr(sized, "stop_distance", None)
-        if signal_stop and signal_stop > 0 and self.broker.name != "ibkr":
+        technical = bool(signal_stop and signal_stop > 0 and self.broker.name != "ibkr")
+        strategy = (getattr(sized, "strategy", "") or "") if technical else ""
+        tm = self.trade_management if technical else None
+        if technical:
             # Market-appropriate (ATR) stop carried by the FX/index signal —
             # never the 3% stock default (≈300 pips on EURUSD).
             from core.fx_signals import bracket_from_distance
             rr = float(getattr(sized, "reward_risk", None) or self.take_profit_pct / self.stop_loss_pct)
             stop_price, limit_price = bracket_from_distance(mid, float(signal_stop), is_long, rr, decimals)
+            if tm is not None and tm.trailing_for(strategy).omit_take_profit:
+                # Trailing stop ON with use_fixed_target=False: let winners run.
+                logger.info("[ARES] %s %s: trailing stop with no fixed target — TP omitted", symbol, strategy)
+                limit_price = None
         else:
             stop_price, limit_price = self._compute_stops(symbol, mid, is_long, decimals=decimals)
 
@@ -447,7 +529,8 @@ class AresAgent:
                     "[ARES] %s has no signal stop — risk-sizing on the fallback %% stop (%s)",
                     symbol, stop_price,
                 )
-            risk_pct = min(float(self.broker.risk_per_trade_pct), float(sized.position_size_pct))
+            # Base risk (or the opt-in ramp level); upstream sizes only lower it.
+            risk_pct = min(self.current_risk_pct(), float(sized.position_size_pct))
             sizing = self.broker.size_order_risk(symbol, entry=mid, stop_loss=stop_price, risk_pct=risk_pct)
             qty = sizing.units
             logger.info(
@@ -457,6 +540,7 @@ class AresAgent:
                 sizing.notional, sizing.notional_fraction,
             )
         else:
+            sizing = None
             # IBKR (unchanged): unlevered notional from the configured budget —
             # the adapter converts it into shares / venue quantity.
             intended_amount = account_val * sized.position_size_pct
@@ -470,11 +554,224 @@ class AresAgent:
             side, res.qty, res.symbol, res.entry_price, res.stop_loss_price, res.take_profit_price,
             self.broker.name, exchange, res.order_id,
         )
+        if technical and tm is not None and tm.manages(strategy):
+            self._register_plan(symbol, strategy, side, res, float(signal_stop), sized, sizing, decimals, tm,
+                                sizing_dist=abs(mid - stop_price))
         return TradeResult(
             order_id=res.order_id, symbol=res.symbol, side=side,
             fill_price=res.entry_price, qty=res.qty,
             stop_loss_price=res.stop_loss_price, take_profit_price=res.take_profit_price,
         )
+
+    # ------------------------------------------------------------------
+    # Trade management — trailing stops + pyramiding (cTrader, opt-in)
+    # ------------------------------------------------------------------
+
+    def _register_plan(self, symbol: str, strategy: str, side: str, res, stop_distance: float,
+                       sized: SizedSignal, sizing, decimals: int, tm: TradeManagementConfig,
+                       sizing_dist: float = 0.0) -> None:
+        """Remember a freshly placed technical trade so manage_open_positions()
+        can trail its stop / pyramid into it. In-memory only (see README)."""
+        entry = float(res.entry_price)
+        # MARKET orders carry a RELATIVE stop, so the live stop is fill ∓ distance.
+        stop = round(entry - stop_distance if side == "BUY" else entry + stop_distance, decimals)
+        atr_val = getattr(sized, "atr", None)
+        if not atr_val or atr_val <= 0:
+            # Fallback: recover ATR from the stop (stop = ATR × atr_stop_multiple, pre-clamp).
+            atr_val = stop_distance / float(tm.atr_stop_multiple.get(strategy, 2.0) or 2.0)
+        vpp = notional = None
+        if sizing is not None and getattr(sizing, "risk_at_stop", None) is not None and sizing_dist > 0:
+            # account-ccy P&L per 1.0 price move of this leg (risk / stop distance it was sized on)
+            vpp = float(sizing.risk_at_stop) / sizing_dist
+            notional = float(getattr(sizing, "notional", 0.0)) or None
+        plan = PositionPlan(
+            symbol=symbol, strategy=strategy, side=side, entry=entry, risk_distance=stop_distance,
+            stop=stop, take_profit=res.take_profit_price, atr=float(atr_val),
+            trailing=tm.trailing_for(strategy), pyramiding=tm.pyramid_for(strategy), decimals=decimals,
+            legs=[Leg(entry=entry, units=float(res.qty), position_id=(res.raw or {}).get("position_id"),
+                      value_per_point=vpp, notional_at_entry=notional)],
+        )
+        self._plans[symbol] = plan
+        logger.info("[ARES] %s managed (%s): trailing=%s style=%s fixed_target=%s | pyramiding=%s max_adds=%d",
+                    symbol, strategy, plan.trailing.enabled, plan.trailing.style,
+                    plan.take_profit is not None, plan.pyramiding.enabled, plan.pyramiding.pyramid_max_adds)
+
+    @property
+    def managed_plans(self) -> dict[str, PositionPlan]:
+        return self._plans
+
+    def _amend_legs(self, plan: PositionPlan, legs: list[Leg], new_stop: float, why: str) -> bool:
+        """Move every open leg's SL to new_stop (keeping the plan's TP). True on success."""
+        amend = getattr(self.broker, "modify_position_sltp", None)
+        if not callable(amend):
+            logger.warning("[ARES] %s: broker %s cannot amend SL — %s skipped",
+                           plan.symbol, self.broker.name, why)
+            return False
+        try:
+            for leg in legs:
+                if leg.position_id is None:
+                    raise BrokerRejectedError(f"{plan.symbol}: leg without position id")
+                amend(leg.position_id, new_stop, plan.take_profit, symbol=plan.symbol)
+        except Exception as exc:
+            logger.error("[ARES] %s: SL amend to %s failed (%s) — %s skipped", plan.symbol, new_stop, exc, why)
+            return False
+        logger.info("[ARES] %s %s: SL %s → %s (%s)", plan.symbol, plan.side, plan.stop, new_stop, why)
+        plan.stop = new_stop
+        if plan.trail is not None:
+            plan.trail.stop = new_stop
+        return True
+
+    def manage_open_positions(self, risk_ceiling_pct: float | None = None) -> list[dict]:
+        """One management pass over the managed (cTrader) positions.
+
+        For each plan: drop it if its positions are gone; trail the stop (only
+        ever tightening); then evaluate one pyramid add. Returns a list of
+        action dicts (for logs/tests). ZEUS calls this once per cycle while the
+        pipeline is RUNNING; never on IBKR, never in mock_execution.
+
+        risk_ceiling_pct: optional upstream ceiling (e.g. seniority
+        max_position_pct) — an add risks min(base risk, ceiling).
+        """
+        if not self._plans:
+            return []
+        try:
+            self._get_connection()
+            positions = list(self.broker.positions())
+        except Exception as exc:
+            logger.warning("[ARES] trade management skipped — positions unavailable: %s", exc)
+            return []
+        actions: list[dict] = []
+        for symbol, plan in list(self._plans.items()):
+            sym_pos = [p for p in positions if (p.symbol or "").upper() == symbol.upper()]
+            ids = {p.position_id for p in sym_pos if p.position_id}
+            open_legs = [lg for lg in plan.legs if (lg.position_id in ids) if lg.position_id] or \
+                        ([lg for lg in plan.legs if lg.position_id is None] if sym_pos else [])
+            if not open_legs:
+                logger.info("[ARES] %s position closed — plan dropped (adds=%d)", symbol, plan.adds)
+                del self._plans[symbol]
+                actions.append({"symbol": symbol, "action": "closed"})
+                continue
+            plan.legs = open_legs
+            price = float(sym_pos[0].current_price)
+
+            # ── trailing stop ────────────────────────────────────────────
+            if plan.trailing.enabled:
+                cand = update_trailing_stop(plan.trail, plan.trailing, price, price, price)
+                cand = round(cand, plan.decimals)
+                if is_tighter(plan.side, cand, plan.stop):
+                    if stop_valid_for_price(plan.side, cand, price):
+                        if self._amend_legs(plan, open_legs, cand, f"trail {plan.trailing.style} "
+                                            f"{plan.trailing.trail_atr_multiple:g}×ATR at "
+                                            f"{plan.r_multiple(price):+.2f}R"):
+                            actions.append({"symbol": symbol, "action": "trail", "stop": cand})
+                    else:
+                        logger.warning("[ARES] %s trail level %s is through the market (%s) — not amended",
+                                       symbol, cand, price)
+                    plan.trail.stop = plan.stop   # state tracks the stop actually working
+
+            # ── pyramiding ───────────────────────────────────────────────
+            if plan.pyramiding.enabled:
+                act = self._try_pyramid(plan, price, positions, sym_pos, risk_ceiling_pct)
+                if act:
+                    actions.append(act)
+        return actions
+
+    def _pyramid_reject(self, plan: PositionPlan, category: str, reason: str) -> None:
+        self.stats.skipped("pyramid", reason, category=category)
+        logger.info("[ARES] %s pyramid add skipped — %s", plan.symbol, reason)
+
+    def _try_pyramid(self, plan: PositionPlan, price: float, positions: list, sym_pos: list,
+                     risk_ceiling_pct: float | None) -> dict | None:
+        gate = pyramid_gate(plan, price, existing_legs=len(sym_pos))
+        if not gate.allowed:
+            # "below trigger" / "max adds" repeat every cycle — counted, logged at DEBUG only.
+            quiet = gate.category in ("pyramid: below trigger", "pyramid: max adds")
+            self.stats.skipped("pyramid", gate.reason, category=gate.category)
+            (logger.debug if quiet else logger.info)("[ARES] %s pyramid add skipped — %s",
+                                                     plan.symbol, gate.reason)
+            return None
+        be = float(gate.breakeven_stop)
+        equity = float(self.default_account_equity)
+        tm = self.trade_management or TradeManagementConfig()
+        # Adds risk at most the BASE risk (never the ramp level), within upstream ceilings.
+        risk_pct = float(getattr(self.broker, "risk_per_trade_pct", tm.risk_per_trade_pct))
+        if risk_ceiling_pct is not None:
+            risk_pct = min(risk_pct, float(risk_ceiling_pct))
+        sizer = getattr(self.broker, "size_order_risk", None)
+        if not callable(sizer) or getattr(self.broker, "sizing_mode", "notional") != "risk":
+            self._pyramid_reject(plan, "pyramid: not risk-sized", "venue is not risk-sized — no adds")
+            return None
+        try:
+            sizing = sizer(plan.symbol, entry=price, stop_loss=be, risk_pct=risk_pct)
+        except BrokerRejectedError as exc:
+            from core.signal_stats import classify_skip
+            self._pyramid_reject(plan, f"pyramid: {classify_skip(str(exc))}", str(exc))
+            return None
+        add_risk = float(sizing.risk_at_stop)
+        if add_risk > equity * risk_pct * float(getattr(self.broker, "max_min_lot_risk_overshoot", 1.5)) + 1e-9:
+            self._pyramid_reject(plan, "pyramid: min-lot overshoot",
+                                 f"add risk {add_risk:.2f} beyond the min-lot tolerance")
+            return None
+
+        # Open risk of everything else: tracked plans at their stops, untracked
+        # positions conservatively at a full base-risk budget each (as ZEUS does).
+        tracked_ids = {lg.position_id for pl in self._plans.values() for lg in pl.legs if lg.position_id}
+        other = 0.0
+        for sym, pl in self._plans.items():
+            if sym == plan.symbol:
+                continue
+            r = pl.risk_to_stop()
+            other += r if r is not None else equity * tm.risk_per_trade_pct * len(pl.legs)
+        untracked = [p for p in positions
+                     if (p.position_id not in tracked_ids if p.position_id else
+                         (p.symbol or "").upper() not in {s.upper() for s in self._plans})]
+        other += len(untracked) * equity * tm.risk_per_trade_pct
+        lev = getattr(self.broker, "leverage_cap_for", None)
+        try:
+            lev_cap = lev(plan.symbol) if callable(lev) else None
+        except Exception:
+            lev_cap = None
+        viol = pyramid_cap_violation(
+            plan, add_risk=add_risk, add_notional=getattr(sizing, "notional", None), price=price,
+            be_stop=be, equity=equity, max_open_risk_pct=tm.max_open_risk_pct,
+            other_open_risk=other, leverage_cap=lev_cap,
+        )
+        if viol:
+            self._pyramid_reject(plan, *viol)
+            return None
+
+        # Belt and braces: the hard no-losers rule, re-checked right before money moves.
+        if not plan.r_multiple(price) > 0:
+            self._pyramid_reject(plan, "pyramid: losing position", "position not in profit — never add")
+            return None
+
+        # 1) Lock break-even on every existing leg FIRST …
+        if is_tighter(plan.side, be, plan.stop):
+            if not self._amend_legs(plan, plan.legs, be, "break-even before pyramid add"):
+                self._pyramid_reject(plan, "pyramid: BE move failed", "could not move stop to break-even")
+                return None
+        # 2) … then add one leg at most base risk, same stop / target.
+        try:
+            res = self.broker.place_bracket(plan.symbol, plan.side, float(sizing.units), price, be,
+                                            plan.take_profit, exchange=self.broker.name.upper())
+        except Exception as exc:
+            self._pyramid_reject(plan, "pyramid: order failed", f"add order failed: {exc}")
+            return None
+        fill = float(res.entry_price)
+        dist = abs(fill - be)
+        plan.legs.append(Leg(
+            entry=fill, units=float(res.qty), position_id=(res.raw or {}).get("position_id"),
+            value_per_point=(add_risk / abs(price - be)) if abs(price - be) > 0 else None,
+            notional_at_entry=getattr(sizing, "notional", None),
+        ))
+        plan.adds += 1
+        self._pending.append(res.order_id)
+        self.stats.fired("pyramid")
+        logger.info("[ARES] %s pyramid add %d/%d: %s %g @ %s | SL=%s (BE) TP=%s | add risk %.2f (%.2f%%) "
+                    "stop dist %g | %s", plan.symbol, plan.adds, plan.pyramiding.pyramid_max_adds, plan.side,
+                    res.qty, fill, be, plan.take_profit, add_risk, risk_pct * 100, dist, gate.reason)
+        return {"symbol": plan.symbol, "action": "pyramid", "add": plan.adds, "units": float(res.qty),
+                "stop": be, "risk": add_risk}
 
     def _compute_stops(
         self,
