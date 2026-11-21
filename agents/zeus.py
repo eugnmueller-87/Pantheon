@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -34,6 +35,7 @@ from agents.artemis import ArtemisAgent
 from agents.hades import HadesAgent
 from agents.icarus import IcarusAgent
 from agents.pythia import PythiaAgent
+from core.broker import BrokerAdapter
 from core.circuit_breaker import CircuitBreaker
 from core.knowledge_base import KnowledgeBase
 from core.milestone_manager import MilestoneManager
@@ -87,6 +89,9 @@ class ZeusConfig:
     take_profit_pct:              float = 0.06
     ib_paper_port:                int   = 4002
     ib_live_port:                 int   = 4001
+    # Execution venue when mock_execution=False: "ibkr" | "ctrader".
+    # Env BROKER overrides. cTrader credentials are env-only (CTRADER_*).
+    broker:                       str   = "ibkr"
     # Single source of truth for the Anthropic model IDs (was hardcoded in 4
     # call sites). claude-sonnet-4-6 is the current Sonnet. Overridable via
     # settings.json so an account-specific / upgraded ID changes in one place.
@@ -227,6 +232,17 @@ class ZeusOrchestrator:
                                _ib_port, self.config.ib_paper_port)
                 _ib_port = self.config.ib_paper_port
 
+        # Broker selection — env BROKER > settings/ZeusConfig.broker > "ibkr".
+        # mock_execution=True never builds a real broker and needs no credentials.
+        self.config.broker = (os.getenv("BROKER") or self.config.broker or "ibkr").strip().lower()
+        if self.config.broker not in ("ibkr", "ctrader"):
+            raise ValueError(f"BROKER must be 'ibkr' or 'ctrader', got {self.config.broker!r}")
+        # One persistent cTrader session shared by Ares + Argus. None → each
+        # agent builds its own IbkrAdapter (clientId 1 / 2) exactly as before.
+        self.broker: Optional[BrokerAdapter] = None
+        if not self.config.mock_execution and self.config.broker == "ctrader":
+            self.broker = self._build_ctrader_broker()
+
         self.ares      = (
             AresMockAgent(
                 account_equity=self.config.default_account_equity,
@@ -240,6 +256,9 @@ class ZeusOrchestrator:
                 port=_ib_port,
                 stop_loss_pct=self.config.stop_loss_pct,
                 take_profit_pct=self.config.take_profit_pct,
+                # Size from the configured risk budget (was silently the 100k default).
+                default_account_equity=self.config.default_account_equity,
+                broker=self.broker,
             )
         )
         self.argus     = ArgusAgent(
@@ -250,6 +269,7 @@ class ZeusOrchestrator:
             ib_host=os.getenv("IB_HOST", "ibgateway"),
             ib_port=_ib_port,
             mock=self.config.mock_execution,  # mirror mock_execution — no IB in mock mode
+            broker=self.broker,
         )
 
         # Shadow learning layer — wire KB into Argus's OutcomeResolver
@@ -272,10 +292,53 @@ class ZeusOrchestrator:
         # Intra-run state — reset each run_once() cycle
         self._run_approved_trades: list[dict] = []  # tickers/sides approved this cycle
 
+        if self.broker is not None:
+            # Warm the persistent session off the init path; Ares/Argus reconnect
+            # lazily anyway, so a failure here is only logged.
+            threading.Thread(target=self._warm_broker, name="broker-warmup", daemon=True).start()
+
         logger.info(
-            "[ZEUS] Initialised — paper=%s mock=%s llm_reasoning=%s",
-            self.config.paper_trading, self.config.mock_execution, self.config.use_llm_reasoning,
+            "[ZEUS] Initialised — paper=%s mock=%s broker=%s llm_reasoning=%s",
+            self.config.paper_trading, self.config.mock_execution,
+            "mock" if self.config.mock_execution else self.config.broker,
+            self.config.use_llm_reasoning,
         )
+
+    def _build_ctrader_broker(self) -> BrokerAdapter:
+        """Construct the shared CTraderAdapter from env credentials + settings.
+
+        Fails closed (raises) if any CTRADER_* variable is missing. In paper
+        mode the endpoint is ALWAYS demo — CTRADER_ENV=live is overridden, the
+        same way a live IB_PORT is dropped when the seniority gate says paper.
+        """
+        from config.settings import load_settings
+        from core.brokers.ctrader import CTraderAdapter, CTraderCredentials
+
+        creds = CTraderCredentials.from_env()
+        if self.config.paper_trading and creds.env == "live":
+            logger.warning("[ZEUS] CTRADER_ENV=live but system is PAPER — forcing cTrader DEMO endpoint")
+            creds.env = "demo"
+        cfg = load_settings().get("ctrader", {}) or {}
+        return CTraderAdapter(
+            creds,
+            account_equity=self.config.default_account_equity,
+            instruments=cfg.get("instruments"),
+            leverage_caps=cfg.get("leverage_caps"),
+            ticker_aliases=cfg.get("ticker_aliases"),
+            account_currency=cfg.get("account_currency", "EUR"),
+            sizing_leverage=float(cfg.get("sizing_leverage", 1.0)),
+            max_min_lot_overshoot=float(cfg.get("max_min_lot_overshoot", 1.5)),
+            entry_order_type=cfg.get("entry_order_type", "MARKET"),
+            heartbeat_interval=float(cfg.get("heartbeat_interval_s", 9.0)),
+            request_timeout=float(cfg.get("request_timeout_s", 10.0)),
+            deal_lookback_days=int(cfg.get("deal_lookback_days", 7)),
+        )
+
+    def _warm_broker(self) -> None:
+        try:
+            self.broker.connect()
+        except Exception as exc:
+            logger.warning("[ZEUS] Broker warm-up connect failed (will retry lazily): %s", exc)
 
     def _verify_model_or_die(self) -> None:
         """Boot-time dry-run of the director model. A bad/unauthorized model ID

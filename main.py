@@ -50,6 +50,8 @@ def build_zeus() -> ZeusOrchestrator:
         default_account_equity     = settings.get("account_equity", settings.get("default_account_equity")),
         stop_loss_pct              = settings.get("stop_loss_pct", 0.03),
         take_profit_pct            = settings.get("take_profit_pct", 0.06),
+        # Execution venue (env BROKER overrides inside ZeusOrchestrator).
+        broker                     = settings.get("broker", "ibkr"),
     )
     return ZeusOrchestrator(config)
 
@@ -221,6 +223,7 @@ class ZeusHandler(BaseHTTPRequestHandler):
             "drawdown_pct":     round(state.current_drawdown_pct * 100, 2),
             "paper_trading":    _zeus.config.paper_trading,
             "mock_execution":   _zeus.config.mock_execution,
+            "broker":           "mock" if _zeus.config.mock_execution else _zeus.config.broker,
             "circuit_breakers": cb_status,
             "seniority":        _zeus.get_seniority_report(),
         })

@@ -18,6 +18,8 @@ services:
   # EXISTING_SESSION_DETECTED_ACTION=primary: dismisses any pre-existing
   # IBKR session so headless login always succeeds unattended.
   # Paper port 4002 is internal only — Ares/Argus connect via service name.
+  # Unused when BROKER=ctrader (cTrader connects directly over SSL to
+  # demo/live.ctraderapi.com:5035). Kept for the IBKR path.
   ibgateway:
     image: ghcr.io/gnzsnz/ib-gateway:stable
     container_name: pantheon_ibgateway

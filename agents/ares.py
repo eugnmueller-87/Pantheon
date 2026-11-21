@@ -1,19 +1,22 @@
 """
-Agent 5 — Ares: Trade Execution (Interactive Brokers)
+Agent 5 — Ares: Trade Execution
 God of decisive action — executes the strike.
-Places bracket orders via ib_async (community successor to ib_insync).
-Imports only from core.types — never from other agents.
+Places bracket orders through a core.broker.BrokerAdapter:
+  - IbkrAdapter (default) — Interactive Brokers via ib_async, clientId 1
+  - CTraderAdapter        — cTrader Open API (IC Markets EU), injected by Zeus
+Imports only from core — never from other agents.
 """
 
 from __future__ import annotations
 
 import logging
-import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from core.agent_knowledge import AgentKnowledgeBase
+from core.broker import BrokerAdapter, BrokerConnectivityError, BrokerRejectedError
+from core.brokers.ibkr import IbkrAdapter
 from core.types import AgentHealth, SignalCategory, SizedSignal, TradeResult
 
 # Market timezones — DST-correct via the IANA database (stdlib zoneinfo).
@@ -45,6 +48,8 @@ _TERMINAL_IB_ERRORS = (
 
 def _is_connectivity_error(exc: Exception) -> bool:
     """True for transient IB-unreachable errors that are safe to queue and retry."""
+    if isinstance(exc, BrokerConnectivityError):
+        return True
     msg = str(exc).lower()
     connectivity_markers = (
         "errno 111",
@@ -62,6 +67,8 @@ def _is_connectivity_error(exc: Exception) -> bool:
 
 def _is_terminal_ib_error(exc: Exception) -> bool:
     """True for IB order rejections that must NOT be retried."""
+    if isinstance(exc, BrokerRejectedError):
+        return True
     msg = str(exc).lower()
     return any(t.lower() in msg for t in _TERMINAL_IB_ERRORS)
 
@@ -110,6 +117,7 @@ def _resolve_symbol_for_market(supplier: str, current_ticker: str) -> tuple[str,
 class AresAgent:
     IB_PAPER_PORT = 4002
     IB_LIVE_PORT  = 4001
+    IB_CLIENT_ID  = 1
 
     def __init__(
         self,
@@ -119,6 +127,7 @@ class AresAgent:
         stop_loss_pct: float = 0.03,
         take_profit_pct: float = 0.06,
         default_account_equity: float = 100_000.0,
+        broker: BrokerAdapter | None = None,
     ):
         self.paper                  = paper
         self.host                   = host
@@ -126,19 +135,55 @@ class AresAgent:
         self.stop_loss_pct          = stop_loss_pct
         self.take_profit_pct        = take_profit_pct
         self.default_account_equity = default_account_equity
-        self._ib                    = None
+        # Default venue is IBKR (connect-per-call, clientId 1) — unchanged behaviour.
+        self.broker: BrokerAdapter  = broker or IbkrAdapter(
+            host=self.host, port=self.port, client_id=self.IB_CLIENT_ID, log_prefix="[ARES]",
+        )
         self._pending: list[str]    = []   # placed order IDs (for cancel_all_pending)
         self.kb = AgentKnowledgeBase("ares")
-        logger.info("[ARES] %s mode — port %d", "PAPER" if paper else "LIVE", self.port)
+        if self.broker.name == "ibkr":
+            logger.info("[ARES] %s mode — IBKR port %d", "PAPER" if paper else "LIVE", self.port)
+        else:
+            logger.info("[ARES] %s mode — broker=%s", "PAPER" if paper else "LIVE", self.broker.name)
+
+    @property
+    def _ib(self):
+        """Back-compat: the raw ib_async handle on the IBKR path (None otherwise)."""
+        return getattr(self.broker, "_ib", None)
 
     def health(self) -> AgentHealth:
-        import socket
         try:
-            with socket.create_connection((self.host, self.port), timeout=3):
-                pass
-            return AgentHealth.HEALTHY
-        except OSError:
+            return AgentHealth.HEALTHY if self.broker.health() else AgentHealth.DEGRADED
+        except Exception:
             return AgentHealth.DEGRADED
+
+    # ------------------------------------------------------------------
+    # Venue-specific routing
+    # ------------------------------------------------------------------
+
+    def _resolve_symbol(self, sized: SizedSignal) -> tuple[str, str]:
+        """(symbol, exchange) for the configured venue.
+
+        IBKR: NYSE/XETRA routing via the ticker map (unchanged).
+        Other venues: map the pipeline ticker onto the venue universe (e.g.
+        cTrader FX/index CFDs). Unmapped tickers keep their raw name and are
+        rejected by the adapter as a terminal error — never queued.
+        """
+        raw_ticker = sized.affected_tickers[0]
+        if self.broker.name == "ibkr":
+            return _resolve_symbol_for_market(sized.supplier, raw_ticker)
+        return (self.broker.resolve_symbol(raw_ticker) or raw_ticker), self.broker.name.upper()
+
+    def _resolve_side(self, sized: SizedSignal) -> str:
+        explicit_side = getattr(sized, "side", None)
+        if explicit_side in ("BUY", "SELL"):
+            return explicit_side
+        if not getattr(self.broker, "supports_short", False):
+            # Long-only: always BUY on new signals — we never short stocks we don't hold.
+            # Zeus LLM can set sized.side="SELL" explicitly to close an existing long.
+            return "BUY"
+        # Two-way venue (FX / index CFDs): direction follows the signal category.
+        return "SELL" if sized.category == SignalCategory.SUPPLIER_DISRUPTION else "BUY"
 
     # ------------------------------------------------------------------
     # Primary entry point — called from Zeus Stage 6
@@ -148,8 +193,7 @@ class AresAgent:
         if not sized.affected_tickers:
             logger.warning("[ARES] No tickers in signal %s", sized.signal_id)
             return self._null_result()
-        raw_ticker = sized.affected_tickers[0]
-        symbol, exchange = _resolve_symbol_for_market(sized.supplier, raw_ticker)
+        symbol, exchange = self._resolve_symbol(sized)
         try:
             ib     = self._get_connection()
             result = self._place_bracket(ib, symbol, sized, exchange=exchange)
@@ -247,10 +291,8 @@ class AresAgent:
         """Write the approved trade to pending_orders instead of dropping it."""
         from core import supabase_client as db
 
-        raw_ticker  = sized.affected_tickers[0]
-        symbol, exchange = _resolve_symbol_for_market(sized.supplier, raw_ticker)
-        is_long     = getattr(sized, "side", None) != "SELL"
-        side        = "BUY" if is_long else "SELL"
+        symbol, exchange = self._resolve_symbol(sized)
+        side        = self._resolve_side(sized)
         approved_at = datetime.now(timezone.utc)
         expires_at  = approved_at + timedelta(minutes=PENDING_ORDER_MAX_AGE_MIN)
 
@@ -272,8 +314,8 @@ class AresAgent:
             expires_at=expires_at,
         )
         logger.info(
-            "[ARES] Trade queued (IB unreachable) — signal=%s symbol=%s expires=%s",
-            sized.signal_id, symbol, expires_at.isoformat(),
+            "[ARES] Trade queued (%s unreachable) — signal=%s symbol=%s expires=%s",
+            self.broker.name, sized.signal_id, symbol, expires_at.isoformat(),
         )
         return TradeResult(
             order_id=str(uuid.uuid4())[:8],
@@ -341,10 +383,9 @@ class AresAgent:
 
     def cancel_all_pending(self) -> None:
         try:
-            ib = self._get_connection()
-            for trade in ib.openTrades():
-                ib.cancelOrder(trade.order)
-            logger.warning("[ARES] Cancelled open orders.")
+            self._get_connection()
+            n = self.broker.cancel_all_pending()
+            logger.warning("[ARES] Cancelled %d open order(s) on %s.", n, self.broker.name)
         except Exception as exc:
             logger.error("[ARES] cancel_all_pending failed: %s", exc)
 
@@ -355,66 +396,43 @@ class AresAgent:
         sized: SizedSignal,
         exchange: str = "SMART",
     ) -> TradeResult:
-        import math
+        """Price, size and place one bracket via the broker adapter.
 
-        from ib_async import Stock
-
-        currency = "EUR" if exchange == "XETRA" else "USD"
-        contract = Stock(symbol, exchange, currency)
-        ib.qualifyContracts(contract)
-
-        # Request delayed data (no live subscription on paper account)
-        ib.reqMarketDataType(3)  # 3 = delayed, 4 = delayed-frozen
-        ticker = ib.reqMktData(contract, "", False, False)
-        ib.sleep(2)
-        mid = ticker.midpoint()
-        if mid is None or (isinstance(mid, float) and math.isnan(mid)) or mid == 0:
-            mid = ticker.last
-        if mid is None or (isinstance(mid, float) and math.isnan(mid)) or mid == 0:
-            mid = ticker.close
-        ib.cancelMktData(contract)
-        if mid is None or (isinstance(mid, float) and math.isnan(mid)) or mid <= 0:
+        `ib` is the session handle returned by _get_connection(); kept in the
+        signature for back-compat — the adapter owns the actual session.
+        """
+        mid = self.broker.get_quote(symbol, exchange=exchange)
+        if mid is None or mid <= 0:
             raise ValueError(f"Could not price {symbol}")
 
         account_val = self._get_account_value(ib)
         if account_val <= 0:
             raise ValueError(f"Invalid account equity: {account_val}")
 
+        # Unlevered notional from the configured risk budget — the adapter
+        # converts it into a valid venue quantity (shares / cTrader volume).
         intended_amount = account_val * sized.position_size_pct
-        qty = max(1, int(intended_amount / mid))
-        actual_amount = qty * mid
+        qty = self.broker.size_order(symbol, intended_amount, mid)
 
-        # Warn when forced min-qty overshoots the intended allocation significantly
-        if qty == 1 and actual_amount > intended_amount * 1.5:
-            logger.warning(
-                "[ARES] Position oversized — %s: intended %.0f %s (%.1f%%) → actual %.0f %s (1 share). "
-                "Signal quality justified the trade.",
-                symbol, intended_amount, currency,
-                sized.position_size_pct * 100,
-                actual_amount, currency,
-            )
+        side    = self._resolve_side(sized)
+        is_long = side == "BUY"
 
-        # Long-only: always BUY on new signals — we never short stocks we don't hold.
-        # Zeus LLM can set sized.side="SELL" explicitly to close an existing long.
-        explicit_side = getattr(sized, "side", None)
-        is_long = explicit_side != "SELL"
-        side    = "BUY" if is_long else "SELL"
+        stop_price, limit_price = self._compute_stops(
+            symbol, mid, is_long, decimals=self.broker.price_decimals(symbol),
+        )
 
-        stop_price, limit_price = self._compute_stops(symbol, mid, is_long)
-
-        bracket = ib.bracketOrder(side, qty, mid, limit_price, stop_price)
-        for o in bracket:
-            ib.placeOrder(contract, o)
-
-        order_id = str(bracket[0].orderId)
+        res = self.broker.place_bracket(
+            symbol, side, qty, mid, stop_price, limit_price, exchange=exchange,
+        )
         logger.info(
-            "[ARES] %s %d %s @ %.2f %s | SL=%.2f TP=%.2f | exchange=%s | id=%s",
-            side, qty, symbol, mid, currency, stop_price, limit_price, exchange, order_id,
+            "[ARES] %s %g %s @ %s | SL=%s TP=%s | venue=%s/%s | id=%s",
+            side, res.qty, res.symbol, res.entry_price, res.stop_loss_price, res.take_profit_price,
+            self.broker.name, exchange, res.order_id,
         )
         return TradeResult(
-            order_id=order_id, symbol=symbol, side=side,
-            fill_price=mid, qty=qty,
-            stop_loss_price=stop_price, take_profit_price=limit_price,
+            order_id=res.order_id, symbol=res.symbol, side=side,
+            fill_price=res.entry_price, qty=res.qty,
+            stop_loss_price=res.stop_loss_price, take_profit_price=res.take_profit_price,
         )
 
     def _compute_stops(
@@ -422,9 +440,11 @@ class AresAgent:
         symbol: str,
         fill_price: float,
         is_long: bool,
+        decimals: int = 2,
     ) -> tuple[float, float]:
         """
-        Return (stop_price, take_profit_price).
+        Return (stop_price, take_profit_price), rounded to `decimals`
+        (2 for IBKR equities; the symbol's digits on cTrader).
 
         If use_atr_stops is True in settings, derive stop distance from ATR,
         clamped to [min_stop_pct, max_stop_pct].
@@ -474,52 +494,24 @@ class AresAgent:
             stop_pct = self.stop_loss_pct
             tp_pct   = self.take_profit_pct
 
-        stop_price  = round(fill_price * (1 - stop_pct if is_long else 1 + stop_pct), 2)
-        limit_price = round(fill_price * (1 + tp_pct   if is_long else 1 - tp_pct),   2)
+        stop_price  = round(fill_price * (1 - stop_pct if is_long else 1 + stop_pct), decimals)
+        limit_price = round(fill_price * (1 + tp_pct   if is_long else 1 - tp_pct),   decimals)
         return stop_price, limit_price
 
     def _get_account_value(self, ib) -> float:
-        # Always use the configured equity cap — never the raw IBKR paper balance.
+        # Always use the configured equity cap — never the raw broker paper/demo balance.
         # IBKR paper accounts start at EUR 1M+ which would massively over-size positions.
         # The configured default_account_equity (e.g. EUR 4,000) is the true risk budget.
         return self.default_account_equity
 
     def _get_connection(self):
-        import asyncio
+        """Ensure a broker session and return its handle.
 
-        from ib_async import IB
-
-        # Close the previous loop cleanly before creating a new one.
-        try:
-            old_loop = asyncio.get_event_loop()
-            if not old_loop.is_running():
-                old_loop.close()
-        except Exception:
-            pass
-        asyncio.set_event_loop(asyncio.new_event_loop())
-
-        last_exc: Exception | None = None
-        for attempt, backoff in enumerate([0, 1, 2]):
-            # Clean up any previous handle before each attempt (including first,
-            # in case self._ib was left over from a prior call).
-            if self._ib is not None:
-                try:
-                    self._ib.disconnect()
-                except Exception:
-                    pass
-                self._ib = None
-            if backoff:
-                time.sleep(backoff)
-            try:
-                self._ib = IB()
-                self._ib.connect(self.host, self.port, clientId=1)
-                logger.info("[ARES] Connected to IB %s:%d (attempt %d)", self.host, self.port, attempt + 1)
-                return self._ib
-            except Exception as exc:
-                last_exc = exc
-                logger.warning("[ARES] Connect attempt %d failed: %s", attempt + 1, exc)
-
-        raise RuntimeError(f"[ARES] Could not connect to IB {self.host}:{self.port} after 3 attempts: {last_exc}")
+        IBKR: tears down the old handle and reconnects (3 attempts, 0/1/2s
+        backoff, clientId 1) — exactly the previous behaviour.
+        cTrader: no-op when the persistent session is already authorized.
+        """
+        return self.broker.connect()
 
     @staticmethod
     def _null_result() -> TradeResult:

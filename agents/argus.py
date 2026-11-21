@@ -2,7 +2,9 @@
 Agent 6 — Argus: Portfolio Monitor & Kill Switch
 The hundred-eyed giant — watches everything, never sleeps.
 Drawdown tracking, kill switch, Telegram alerts, outcome backfill.
-Imports only from core.types — never from other agents.
+Reads positions / closing fills through a core.broker.BrokerAdapter
+(IbkrAdapter clientId 2 by default; Zeus injects the shared CTraderAdapter).
+Imports only from core — never from other agents.
 """
 
 from __future__ import annotations
@@ -16,6 +18,8 @@ from typing import Callable, Optional
 import requests
 
 from core.agent_knowledge import AgentKnowledgeBase
+from core.broker import BrokerAdapter
+from core.brokers.ibkr import IbkrAdapter
 from core.shadow_learning import OutcomeResolver
 from core.types import AgentHealth
 
@@ -50,6 +54,8 @@ class PortfolioState:
 
 
 class ArgusAgent:
+    IB_CLIENT_ID = 2
+
     def __init__(
         self,
         max_drawdown_pct:       float                          = 0.08,
@@ -62,6 +68,7 @@ class ArgusAgent:
         ib_host:                str                            = "ibgateway",
         ib_port:                int                            = 4002,
         mock:                   bool                           = False,  # skip IB, track positions in-memory only
+        broker:                 Optional[BrokerAdapter]        = None,   # default: IbkrAdapter(clientId=2)
     ):
         self.max_drawdown_pct  = max_drawdown_pct
         self._on_kill          = on_kill
@@ -70,10 +77,12 @@ class ArgusAgent:
         self._telegram_chat_id = telegram_chat_id or os.getenv("TELEGRAM_CHAT_ID")
         self._state            = PortfolioState(total_equity=default_account_equity,
                                                peak_equity=default_account_equity)
-        self._ib               = None
         self._ib_host          = ib_host
         self._ib_port          = ib_port
         self._mock             = mock
+        self.broker: BrokerAdapter = broker or IbkrAdapter(
+            host=ib_host, port=ib_port, client_id=self.IB_CLIENT_ID, log_prefix="[ARGUS]",
+        )
         self._milestone        = milestone_manager
         self._default_equity   = default_account_equity
         self.kb                = AgentKnowledgeBase("argus")
@@ -83,15 +92,17 @@ class ArgusAgent:
         """Wire the shared KB into the OutcomeResolver after construction."""
         self.outcome_resolver = OutcomeResolver(knowledge_base=knowledge_base)
 
+    @property
+    def _ib(self):
+        """Back-compat: the raw ib_async handle on the IBKR path (None otherwise)."""
+        return getattr(self.broker, "_ib", None)
+
     def health(self) -> AgentHealth:
         if self._mock:
             return AgentHealth.HEALTHY
-        import socket
         try:
-            with socket.create_connection((self._ib_host, self._ib_port), timeout=3):
-                pass
-            return AgentHealth.HEALTHY
-        except OSError:
+            return AgentHealth.HEALTHY if self.broker.health() else AgentHealth.DEGRADED
+        except Exception:
             return AgentHealth.DEGRADED
 
     def refresh(self) -> PortfolioState:
@@ -106,7 +117,8 @@ class ArgusAgent:
                 # DB-driven + best-effort: never let it break the portfolio tick.
                 self._resolve_closed_outcomes(ib)
             except Exception as exc:
-                logger.warning("[ARGUS] IB refresh failed (%s) — falling back to Supabase equity", exc)
+                logger.warning("[ARGUS] %s refresh failed (%s) — falling back to Supabase equity",
+                               self.broker.name, exc)
                 # Recompute equity from Supabase positions so the dashboard
                 # reflects real cash (starting_equity − cost_basis + market_value)
                 # rather than always showing the raw starting_equity figure.
@@ -137,7 +149,7 @@ class ArgusAgent:
                     len(self._state.snapshots))
         return self._state
 
-    def _resolve_closed_outcomes(self, ib) -> None:
+    def _resolve_closed_outcomes(self, ib=None) -> None:
         """Detect trades the IB bracket has closed and backfill pnl_pct/hit.
 
         Restart-safe: reconstructs the open set from the DB (not in-memory
@@ -165,34 +177,18 @@ class ArgusAgent:
         except Exception as exc:
             logger.warning("[ARGUS] outcome resolution failed: %s", exc)
 
-    @staticmethod
-    def _closing_fills_by_symbol(ib) -> dict[str, list]:
-        """Map symbol -> [{price, qty, time}] of IB closing executions, oldest-first.
+    def _closing_fills_by_symbol(self, ib=None) -> dict[str, list]:
+        """Map symbol -> [{price, qty, time}] of broker closing executions, oldest-first.
 
-        Long-only system: a closing execution is a SELL (side 'SLD'). Best-effort —
-        returns {} on any error so a fills hiccup never breaks the tick.
+        IBKR (long-only): SELL executions ('SLD'). cTrader: deals that closed a
+        position. Best-effort — returns {} on any error so a fills hiccup never
+        breaks the tick.
         """
-        out: dict[str, list] = {}
         try:
-            for f in ib.fills():
-                ex = getattr(f, "execution", None)
-                if ex is None or getattr(ex, "side", "") != "SLD":
-                    continue
-                sym = getattr(getattr(f, "contract", None), "symbol", None)
-                if not sym:
-                    continue
-                price = getattr(ex, "avgPrice", None) or getattr(ex, "price", None)
-                out.setdefault(sym, []).append({
-                    "price": price,
-                    "qty":   getattr(ex, "shares", None),
-                    "time":  getattr(ex, "time", None),
-                })
+            return self.broker.closing_fills()
         except Exception as exc:
-            logger.debug("[ARGUS] could not read IB fills: %s", exc)
+            logger.debug("[ARGUS] could not read %s fills: %s", self.broker.name, exc)
             return {}
-        for sym in out:
-            out[sym].sort(key=lambda d: d.get("time") or "")
-        return out
 
     def open_position_count(self) -> int:
         return len(self._state.snapshots)
@@ -305,7 +301,7 @@ class ArgusAgent:
             logger.warning("[ARGUS] Supabase equity fallback failed: %s", exc)
             return self._default_equity
 
-    def _build_state(self, ib) -> PortfolioState:
+    def _build_state(self, ib=None) -> PortfolioState:
         from config.settings import load_settings
         cfg = load_settings()
         sl_pct = cfg.get("stop_loss_pct", 0.03)
@@ -318,23 +314,23 @@ class ArgusAgent:
         equity = self._default_equity
 
         snapshots: list[PositionSnapshot] = []
-        for pos in ib.portfolio():
-            if pos.position == 0:
+        for pos in self.broker.positions():
+            if pos.qty == 0:
                 continue
-            cost = pos.averageCost or 1.0
-            qty = abs(pos.position)
+            cost = pos.avg_cost or 1.0
+            qty = abs(pos.qty)
             denom = qty * cost
-            unrealized_pnl_pct = pos.unrealizedPNL / denom if denom != 0 else 0.0
-            is_long = pos.position > 0
+            unrealized_pnl_pct = pos.unrealized_pnl / denom if denom != 0 else 0.0
+            is_long = pos.side == "LONG"
             sl_price = round(cost * (1 - sl_pct if is_long else 1 + sl_pct), 4)
             tp_price = round(cost * (1 + tp_pct if is_long else 1 - tp_pct), 4)
             snapshots.append(PositionSnapshot(
-                symbol             = pos.contract.symbol,
-                side               = "LONG" if is_long else "SHORT",
+                symbol             = pos.symbol,
+                side               = pos.side,
                 qty                = qty,
                 avg_cost           = cost,
-                current_price      = pos.marketPrice,
-                unrealized_pnl     = pos.unrealizedPNL,
+                current_price      = pos.current_price,
+                unrealized_pnl     = pos.unrealized_pnl,
                 unrealized_pnl_pct = unrealized_pnl_pct,
                 stop_loss_price    = sl_price,
                 take_profit_price  = tp_price,
@@ -422,36 +418,5 @@ class ArgusAgent:
             logger.warning("[ARGUS] Supabase persist failed: %s", exc)
 
     def _get_connection(self):
-        import asyncio
-        import time
-
-        from ib_async import IB
-
-        try:
-            old_loop = asyncio.get_event_loop()
-            if not old_loop.is_running():
-                old_loop.close()
-        except Exception:
-            pass
-        asyncio.set_event_loop(asyncio.new_event_loop())
-
-        last_exc: Exception | None = None
-        for attempt, backoff in enumerate([0, 1, 2]):
-            if self._ib is not None:
-                try:
-                    self._ib.disconnect()
-                except Exception:
-                    pass
-                self._ib = None
-            if backoff:
-                time.sleep(backoff)
-            try:
-                self._ib = IB()
-                self._ib.connect(self._ib_host, self._ib_port, clientId=2)
-                logger.info("[ARGUS] Connected to IB %s:%d (attempt %d)", self._ib_host, self._ib_port, attempt + 1)
-                return self._ib
-            except Exception as exc:
-                last_exc = exc
-                logger.warning("[ARGUS] Connect attempt %d failed: %s", attempt + 1, exc)
-
-        raise RuntimeError(f"[ARGUS] Could not connect to IB {self._ib_host}:{self._ib_port} after 3 attempts: {last_exc}")
+        """Ensure a broker session (IBKR: reconnect w/ clientId 2, 3 attempts)."""
+        return self.broker.connect()

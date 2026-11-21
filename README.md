@@ -225,11 +225,24 @@ IB_HOST=ibgateway
 IB_PAPER_PORT=4002
 ```
 
+#### cTrader (optional, demo first)
+
+Execution can run on cTrader (IC Markets EU) instead of IBKR. It is opt-in: the default stays `BROKER=ibkr`, and `mock_execution=true` never touches a broker.
+
+- Universe on this path is FX majors and index CFDs only (EURUSD, GBPUSD, USDJPY, US500, USTEC, DE40). IC Markets EU does not offer stock CFDs on cTrader, so the IBKR stock ticker maps are unused here. Broker symbol names vary (NAS100, GER40, ...): aliases live in `config/settings.py` under `ctrader.instruments`.
+- Sizing is unlevered: `default_account_equity * position_size_pct`, converted to cTrader volume (0.01 units) and rounded to the symbol's min/step. ESMA caps (FX 1:30, indices 1:20, commodities 1:10, stocks 1:5, crypto 1:2) are recorded and never exceeded. If the venue minimum is far above the intended size, the order is skipped instead of oversized.
+- Credentials come from env only: register an app at https://openapi.ctrader.com (it must be approved), get tokens with `scope=trading` (OAuth or the Playground), then set `CTRADER_CLIENT_ID`, `CTRADER_CLIENT_SECRET`, `CTRADER_ACCESS_TOKEN`, `CTRADER_REFRESH_TOKEN`, `CTRADER_ACCOUNT_ID` (ctidTraderAccountId) and `CTRADER_ENV=demo`. Paper mode always uses the demo endpoint.
+- Before switching `BROKER=ctrader`, run the smoke test against the demo account. It checks auth, prints which symbols resolved, and places and cancels one minimum-size pending order:
+
+```bash
+python scripts/ctrader_smoke_test.py            # add --no-order for auth + symbols only
+```
+
 ### 3. Run tests
 
 ```bash
 pytest tests/ -q
-# 485 tests, all green
+# 572 tests, all green
 ```
 
 ### 4. Produce signals (run once to seed, then runs every 30 min in prod)

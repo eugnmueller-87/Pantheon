@@ -24,6 +24,42 @@ _DEFAULTS: dict[str, Any] = {
     "webhook_port": 8080,
     # Icarus reads signals from Supabase (written by hermes_local EDGAR/Finnhub fetcher)
     "signal_source": "supabase",
+    # Execution venue: "ibkr" (default, IB Gateway) | "ctrader" (IC Markets EU via
+    # cTrader Open API). Env BROKER overrides. Ignored when mock_execution=True.
+    "broker": "ibkr",
+    # cTrader — only read when broker == "ctrader". Credentials are env-only
+    # (CTRADER_* in .env), never here.
+    "ctrader": {
+        "account_currency":      "EUR",
+        # Risk leverage used for SIZING. 1.0 = unlevered notional
+        # (equity × position_size_pct). The Argus 8% drawdown kill assumes this —
+        # do not raise it to the broker's 1:30. Clamped to the caps below.
+        "sizing_leverage":       1.0,
+        # If the floored size is below the venue min lot, bump to the min lot only
+        # when that is <= this multiple of the intended notional; otherwise skip.
+        "max_min_lot_overshoot": 1.5,
+        "entry_order_type":      "MARKET",   # MARKET (relative SL/TP) | LIMIT at mid (absolute SL/TP)
+        "heartbeat_interval_s":  9.0,        # cTrader requires a heartbeat at least every 10s
+        "request_timeout_s":     10.0,
+        "deal_lookback_days":    7,          # closing-deal window for Argus outcome backfill
+        # IC Markets EU retail (ESMA) maximum leverage per asset class. Recorded so
+        # we never request more than the legal maximum; values here can only
+        # TIGHTEN the built-in ESMA caps (core/brokers/ctrader_instruments.py).
+        "leverage_caps": {"fx": 30.0, "index": 20.0, "commodity": 10.0, "stock": 5.0, "crypto": 2.0},
+        # Tradable universe on the cTrader path: FX majors + index CFDs (no stocks —
+        # IC Markets EU offers stock CFDs on MT5 only). These are typical IC Markets /
+        # cTrader names and MUST be confirmed against the demo/live symbol list in
+        # scripts/ctrader_smoke_test.py; brokers sometimes use US30, NAS100, GER40, etc.
+        # Each logical name resolves to the FIRST alias the broker lists.
+        "instruments": {
+            "EURUSD": {"asset_class": "fx",    "quote_ccy": "USD", "aliases": ["EURUSD"]},
+            "GBPUSD": {"asset_class": "fx",    "quote_ccy": "USD", "aliases": ["GBPUSD"]},
+            "USDJPY": {"asset_class": "fx",    "quote_ccy": "JPY", "aliases": ["USDJPY"]},
+            "US500":  {"asset_class": "index", "quote_ccy": "USD", "aliases": ["US500", "SPX500", "US 500", "USA500"]},
+            "USTEC":  {"asset_class": "index", "quote_ccy": "USD", "aliases": ["USTEC", "NAS100", "US100", "USTECH"]},
+            "DE40":   {"asset_class": "index", "quote_ccy": "EUR", "aliases": ["DE40", "GER40", "DAX40", "GER30", "DE30"]},
+        },
+    },
     # IBKR
     "ib_host": "127.0.0.1",
     "ib_paper_port": 4002,
@@ -88,5 +124,11 @@ def load_settings() -> dict[str, Any]:
     if _SETTINGS_FILE.exists():
         with open(_SETTINGS_FILE, encoding="utf-8") as f:
             user = json.load(f)
-        return {**_DEFAULTS, **user}
+        merged = {**_DEFAULTS, **user}
+        # One-level merge for nested sections (e.g. a partial "ctrader" block in
+        # settings.json keeps the remaining defaults).
+        for key, default in _DEFAULTS.items():
+            if isinstance(default, dict) and isinstance(user.get(key), dict):
+                merged[key] = {**default, **user[key]}
+        return merged
     return dict(_DEFAULTS)
