@@ -689,13 +689,24 @@ def _sized(ticker="EURUSD", category=None, pct=0.02):
 
 
 class TestAresArgusOnCTrader:
-    def test_ares_places_unlevered_buy(self):
+    def test_ares_places_unlevered_buy_in_legacy_notional_mode(self):
+        from agents.ares import AresAgent
+        a, t = _adapter(sizing_mode="notional")
+        ares = AresAgent(paper=True, broker=a, default_account_equity=4000.0)
+        res = ares.place(_sized("EURUSD=X"))
+        assert res.status == "submitted" and res.side == "BUY" and res.symbol == "EURUSD"
+        assert res.qty * res.fill_price * (1 / 1.08) == pytest.approx(80.0, abs=1.0)
+
+    def test_ares_risk_sizes_buy_by_default(self):
+        # Default cTrader sizing is risk-based: 1% of €4000 = €40 lost at the stop.
+        # No signal stop here → fallback 3% stop (0.0324 USD ≈ €0.03/unit) → 1333 units.
         from agents.ares import AresAgent
         a, t = _adapter()
         ares = AresAgent(paper=True, broker=a, default_account_equity=4000.0)
         res = ares.place(_sized("EURUSD=X"))
         assert res.status == "submitted" and res.side == "BUY" and res.symbol == "EURUSD"
-        assert res.qty * res.fill_price * (1 / 1.08) == pytest.approx(80.0, abs=1.0)
+        loss_at_stop = res.qty * (res.fill_price - res.stop_loss_price) / 1.08
+        assert loss_at_stop == pytest.approx(40.0, abs=0.5)
         assert res.stop_loss_price < res.fill_price < res.take_profit_price
         assert res.stop_loss_price == round(res.stop_loss_price, 5)
 

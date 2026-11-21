@@ -230,7 +230,9 @@ IB_PAPER_PORT=4002
 Execution can run on cTrader (IC Markets EU) instead of IBKR. It is opt-in: the default stays `BROKER=ibkr`, and `mock_execution=true` never touches a broker.
 
 - Universe on this path is FX majors and index CFDs only (EURUSD, GBPUSD, USDJPY, US500, USTEC, DE40). IC Markets EU does not offer stock CFDs on cTrader, so the IBKR stock ticker maps are unused here. Broker symbol names vary (NAS100, GER40, ...): aliases live in `config/settings.py` under `ctrader.instruments`.
-- Sizing is unlevered: `default_account_equity * position_size_pct`, converted to cTrader volume (0.01 units) and rounded to the symbol's min/step. ESMA caps (FX 1:30, indices 1:20, commodities 1:10, stocks 1:5, crypto 1:2) are recorded and never exceeded. If the venue minimum is far above the intended size, the order is skipped instead of oversized.
+- Signals: with `BROKER=ctrader`, Icarus replaces the Supabase/EDGAR/Finnhub stock signals with rule-based technical setups from `core/fx_signals.py` (settings block `ctrader_signals`). Index CFDs use a 20-bar Donchian breakout on daily bars with an SMA50 trend filter. FX majors use a z-score mean reversion vs SMA50 on hourly bars, only during the London/New York overlap and not during ATR blow-offs. Both have ATR% volatility filters and a stale-data guard. Bars come from yfinance (EURUSD=X, GBPUSD=X, USDJPY=X, ^GSPC, ^NDX, ^GDAXI). No setup means no signal. Stops are ATR multiples (pips, not the 3% stock stop) and the take-profit is 2R. These rules are untested against live markets: paper/demo only until you have evaluated them yourself. `BROKER=ibkr` (default) never runs this code.
+- Sizing is risk-based (`ctrader.sizing_mode = "risk"`): `units = equity * risk_per_trade_pct / (stop distance * quote-to-EUR rate)`, floored to the symbol's step. The default risk is 1% (`ctrader.risk_per_trade_pct`), and Pythia/ZEUS/seniority sizes can only lower it. If the result is below the min lot, the min lot is used only when its loss at the stop is at most `max_min_lot_risk_overshoot` (1.5x) of the budget. Otherwise the trade is skipped and the log shows both risks. Notional above the ESMA cap (FX 1:30, indices 1:20, ...) is shrunk to the cap, and the trade is skipped if even the min lot exceeds it. A missing conversion pair also skips the trade. ZEUS budgets risk on this path, not notional: open positions x 1% + this trade must stay within `ctrader.max_open_risk_pct` (3%). The Argus 8% drawdown kill is unchanged. The IBKR path keeps notional `position_size_pct` share sizing.
+- Equity for the cTrader path: set `CTRADER_ACCOUNT_EQUITY=500` in `.env` (or `ctrader.account_equity` in settings) for a 500 EUR demo. It overrides `default_account_equity` (4000, still used by IBKR) for sizing and the milestone gate. Note that at 500 EUR, 1% is 5 EUR, so FX trades only fit when the stop is short enough for the 1,000-unit min lot (about 54 pips on EURUSD at exactly 1%, about 80 pips with the 1.5x tolerance).
 - Credentials come from env only: register an app at https://openapi.ctrader.com (it must be approved), get tokens with `scope=trading` (OAuth or the Playground), then set `CTRADER_CLIENT_ID`, `CTRADER_CLIENT_SECRET`, `CTRADER_ACCESS_TOKEN`, `CTRADER_REFRESH_TOKEN`, `CTRADER_ACCOUNT_ID` (ctidTraderAccountId) and `CTRADER_ENV=demo`. Paper mode always uses the demo endpoint.
 - Before switching `BROKER=ctrader`, run the smoke test against the demo account. It checks auth, prints which symbols resolved, and places and cancels one minimum-size pending order:
 
@@ -242,7 +244,7 @@ python scripts/ctrader_smoke_test.py            # add --no-order for auth + symb
 
 ```bash
 pytest tests/ -q
-# 572 tests, all green
+# 644 tests, all green
 ```
 
 ### 4. Produce signals (run once to seed, then runs every 30 min in prod)

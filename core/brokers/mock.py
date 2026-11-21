@@ -11,15 +11,22 @@ from __future__ import annotations
 import uuid
 from typing import Optional
 
-from core.broker import BracketResult, BrokerConnectivityError, BrokerPosition
+from core.broker import BracketResult, BrokerConnectivityError, BrokerPosition, BrokerRejectedError
 
 
 class MockBrokerAdapter:
     name = "mock"
 
     def __init__(self, prices: Optional[dict[str, float]] = None, supports_short: bool = True,
-                 reachable: bool = True, decimals: int = 4):
+                 reachable: bool = True, decimals: int = 4,
+                 sizing_mode: str = "notional", risk_per_trade_pct: float = 0.01,
+                 account_equity: float = 4000.0):
         self.prices          = dict(prices or {})
+        # "notional" mirrors IBKR-style sizing; "risk" mirrors the cTrader path.
+        self.sizing_mode        = sizing_mode
+        self.risk_per_trade_pct = risk_per_trade_pct
+        self.account_equity     = account_equity
+        self.risk_calls: list[dict] = []
         self.supports_short  = supports_short
         self.reachable       = reachable
         self.decimals        = decimals
@@ -53,6 +60,20 @@ class MockBrokerAdapter:
 
     def size_order(self, symbol: str, notional: float, price: float) -> float:
         return round(notional / price, 2)
+
+    def size_order_risk(self, symbol: str, entry: float, stop_loss: float,
+                        risk_pct: Optional[float] = None):
+        """Simplified risk sizing (account ccy == quote ccy, 0.01-unit step, no min lot)."""
+        from types import SimpleNamespace
+        pct = self.risk_per_trade_pct if risk_pct is None else min(risk_pct, self.risk_per_trade_pct)
+        dist = abs(entry - stop_loss)
+        if dist <= 0:
+            raise BrokerRejectedError("stop equals entry")
+        units = int(self.account_equity * pct / dist * 100) / 100
+        self.risk_calls.append({"symbol": symbol, "entry": entry, "stop": stop_loss, "risk_pct": pct})
+        return SimpleNamespace(units=units, risk_budget=self.account_equity * pct,
+                               risk_at_stop=units * dist, notional=units * entry,
+                               notional_fraction=units * entry / self.account_equity)
 
     def place_bracket(self, symbol, side, qty, entry, stop_loss, take_profit, exchange=None) -> BracketResult:
         oid = uuid.uuid4().hex[:8]

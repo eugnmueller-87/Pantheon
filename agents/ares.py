@@ -182,7 +182,12 @@ class AresAgent:
             # Long-only: always BUY on new signals — we never short stocks we don't hold.
             # Zeus LLM can set sized.side="SELL" explicitly to close an existing long.
             return "BUY"
-        # Two-way venue (FX / index CFDs): direction follows the signal category.
+        # Two-way venue (FX / index CFDs): a technical signal carries its own
+        # direction (core/fx_signals.py → RawSignal.trade_side) …
+        trade_side = getattr(sized, "trade_side", "") or ""
+        if trade_side in ("BUY", "SELL"):
+            return trade_side
+        # … otherwise direction follows the signal category.
         return "SELL" if sized.category == SignalCategory.SUPPLIER_DISRUPTION else "BUY"
 
     # ------------------------------------------------------------------
@@ -304,6 +309,11 @@ class AresAgent:
             "position_size_pct": sized.position_size_pct,
             "confidence":        sized.confidence,
         }
+        # Technical (cTrader) signals: keep the ATR stop so a retry sizes and
+        # brackets exactly like the original attempt would have.
+        if getattr(sized, "stop_distance", None):
+            payload["stop_distance"] = sized.stop_distance
+            payload["reward_risk"]   = sized.reward_risk
 
         db.enqueue_pending_order(
             signal_id=sized.signal_id,
@@ -348,6 +358,8 @@ class AresAgent:
             category=SignalCategory.POSITIVE_NEWS,  # direction already encoded in side
             severity=Severity.HIGH,
             affected_tickers=[symbol],
+            stop_distance=payload.get("stop_distance"),
+            reward_risk=payload.get("reward_risk"),
         )
         filtered = FilteredSignal(original=raw, compliance_score=1.0)
         macro = MacroContext(
@@ -375,6 +387,8 @@ class AresAgent:
                 category=SignalCategory.SUPPLIER_DISRUPTION,
                 severity=Severity.HIGH,
                 affected_tickers=[symbol],
+                stop_distance=payload.get("stop_distance"),
+                reward_risk=payload.get("reward_risk"),
             )
         # Reconcile re-uses the exchange that was active when the order was queued.
         # The symbol in the payload is already the exchange-specific ticker (e.g. SIE.DE).
@@ -409,17 +423,44 @@ class AresAgent:
         if account_val <= 0:
             raise ValueError(f"Invalid account equity: {account_val}")
 
-        # Unlevered notional from the configured risk budget — the adapter
-        # converts it into a valid venue quantity (shares / cTrader volume).
-        intended_amount = account_val * sized.position_size_pct
-        qty = self.broker.size_order(symbol, intended_amount, mid)
-
         side    = self._resolve_side(sized)
         is_long = side == "BUY"
+        decimals = self.broker.price_decimals(symbol)
 
-        stop_price, limit_price = self._compute_stops(
-            symbol, mid, is_long, decimals=self.broker.price_decimals(symbol),
-        )
+        signal_stop = getattr(sized, "stop_distance", None)
+        if signal_stop and signal_stop > 0 and self.broker.name != "ibkr":
+            # Market-appropriate (ATR) stop carried by the FX/index signal —
+            # never the 3% stock default (≈300 pips on EURUSD).
+            from core.fx_signals import bracket_from_distance
+            rr = float(getattr(sized, "reward_risk", None) or self.take_profit_pct / self.stop_loss_pct)
+            stop_price, limit_price = bracket_from_distance(mid, float(signal_stop), is_long, rr, decimals)
+        else:
+            stop_price, limit_price = self._compute_stops(symbol, mid, is_long, decimals=decimals)
+
+        if getattr(self.broker, "sizing_mode", "notional") == "risk":
+            # cTrader: size from the STOP — lose ≈ risk_pct of equity if it is hit.
+            # Pythia / ZEUS / seniority sizes act as a ceiling on that fraction.
+            if sized.position_size_pct <= 0:
+                raise BrokerRejectedError(f"{symbol}: position_size_pct={sized.position_size_pct} — nothing to size")
+            if not signal_stop:
+                logger.warning(
+                    "[ARES] %s has no signal stop — risk-sizing on the fallback %% stop (%s)",
+                    symbol, stop_price,
+                )
+            risk_pct = min(float(self.broker.risk_per_trade_pct), float(sized.position_size_pct))
+            sizing = self.broker.size_order_risk(symbol, entry=mid, stop_loss=stop_price, risk_pct=risk_pct)
+            qty = sizing.units
+            logger.info(
+                "[ARES] Risk sizing %s: risk %.2f%% (budget %.2f, at stop %.2f) → %g units, "
+                "notional %.2f (%.2fx equity)",
+                symbol, risk_pct * 100, sizing.risk_budget, sizing.risk_at_stop, qty,
+                sizing.notional, sizing.notional_fraction,
+            )
+        else:
+            # IBKR (unchanged): unlevered notional from the configured budget —
+            # the adapter converts it into shares / venue quantity.
+            intended_amount = account_val * sized.position_size_pct
+            qty = self.broker.size_order(symbol, intended_amount, mid)
 
         res = self.broker.place_bracket(
             symbol, side, qty, mid, stop_price, limit_price, exchange=exchange,

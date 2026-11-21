@@ -31,12 +31,31 @@ _DEFAULTS: dict[str, Any] = {
     # (CTRADER_* in .env), never here.
     "ctrader": {
         "account_currency":      "EUR",
-        # Risk leverage used for SIZING. 1.0 = unlevered notional
-        # (equity × position_size_pct). The Argus 8% drawdown kill assumes this —
-        # do not raise it to the broker's 1:30. Clamped to the caps below.
+        # Equity used for sizing + the milestone gate when broker == "ctrader".
+        # None → falls back to the global default_account_equity (4000, which the
+        # IBKR path keeps). For a small demo set e.g. 500.0 here, or env
+        # CTRADER_ACCOUNT_EQUITY=500 (env wins). Never the broker's raw balance.
+        "account_equity":        None,
+        # Sizing model on the cTrader path:
+        #   "risk"     (default) — units = equity × risk_per_trade_pct / stop loss per unit
+        #   "notional" (legacy)  — units = equity × position_size_pct × sizing_leverage / price
+        "sizing_mode":           "risk",
+        # Fraction of equity LOST if the stop is hit (1% default). Pythia/ZEUS/
+        # seniority/milestone sizes act as a CEILING on this fraction on the
+        # cTrader path — they can lower the risk, never raise it above this value.
+        "risk_per_trade_pct":    0.01,
+        # If the risk-sized volume is below the venue min lot, use the min lot only
+        # when the min lot's stop-out LOSS is <= this multiple of the risk budget;
+        # otherwise skip the trade and log intended vs min-lot risk.
+        "max_min_lot_risk_overshoot": 1.5,
+        # ZEUS budget gate on the cTrader path (replaces the notional
+        # max_deployed_pct check, which is meaningless for risk-sized CFDs):
+        # sum of open-trade risk + this trade's risk must stay <= this × equity.
+        "max_open_risk_pct":     0.03,
+        # LEGACY notional mode only: leverage applied to notional sizing. 1.0 =
+        # unlevered. Clamped to the ESMA caps below.
         "sizing_leverage":       1.0,
-        # If the floored size is below the venue min lot, bump to the min lot only
-        # when that is <= this multiple of the intended notional; otherwise skip.
+        # LEGACY notional mode only: min-lot bump tolerance in NOTIONAL terms.
         "max_min_lot_overshoot": 1.5,
         "entry_order_type":      "MARKET",   # MARKET (relative SL/TP) | LIMIT at mid (absolute SL/TP)
         "heartbeat_interval_s":  9.0,        # cTrader requires a heartbeat at least every 10s
@@ -58,6 +77,64 @@ _DEFAULTS: dict[str, Any] = {
             "US500":  {"asset_class": "index", "quote_ccy": "USD", "aliases": ["US500", "SPX500", "US 500", "USA500"]},
             "USTEC":  {"asset_class": "index", "quote_ccy": "USD", "aliases": ["USTEC", "NAS100", "US100", "USTECH"]},
             "DE40":   {"asset_class": "index", "quote_ccy": "EUR", "aliases": ["DE40", "GER40", "DAX40", "GER30", "DE30"]},
+        },
+    },
+    # Signal universe for the cTrader path (core/fx_signals.py). Only consulted
+    # when broker == "ctrader": the FX/index generator then REPLACES the
+    # Supabase/EDGAR/Finnhub stock signals in Icarus. broker == "ibkr" never
+    # touches this block. Bars come from yfinance by default (no credentials).
+    "ctrader_signals": {
+        "enabled": True,
+        # "yfinance" (default) | "ctrader_trendbars" (hook only: used when the
+        # connected adapter exposes get_trendbars(); otherwise falls back to yfinance)
+        "source": "yfinance",
+        # Logical cTrader names to scan. None → every key of ctrader.instruments.
+        "instruments": None,
+        # Logical name → yfinance ticker. US500 may use "ES=F" (futures, ~23h
+        # session) instead of the cash index "^GSPC"; same for "NQ=F" / USTEC.
+        "yfinance_tickers": {
+            "EURUSD": "EURUSD=X", "GBPUSD": "GBPUSD=X", "USDJPY": "USDJPY=X",
+            "US500": "^GSPC", "USTEC": "^NDX", "DE40": "^GDAXI",
+        },
+        # Which strategy runs for which asset class.
+        "strategy_by_asset_class": {"index": "breakout", "fx": "mean_reversion"},
+        # Index CFDs — Donchian breakout with trend + volatility filters, daily bars.
+        "breakout": {
+            "interval": "1d", "period": "1y",
+            "donchian_window":   20,      # close beyond the prior 20-bar high/low
+            "trend_ma_period":   50,      # long only above SMA50, short only below (None = off)
+            "atr_period":        14,
+            "atr_stop_multiple": 2.0,     # stop = entry ∓ 2 × ATR
+            "min_stop_pct":      0.004,   # stop distance floor/ceiling as fraction of price
+            "max_stop_pct":      0.03,
+            "min_atr_pct":       0.004,   # skip dead markets: ATR < 0.4% of price
+            "max_atr_pct":       0.03,    # skip disorderly markets: ATR > 3% of price
+            "max_atr_expansion": None,    # breakouts tolerate expansion; set e.g. 3.0 to cap
+            "atr_expansion_lookback": 100,
+            "reward_risk":       2.0,
+            "allow_short":       True,
+            "session":           "any",   # weekdays only
+            "max_bar_age_hours": 96,      # ignore stale data (covers a weekend)
+        },
+        # FX majors — z-score mean reversion vs SMA with session + volatility filters, hourly bars.
+        "mean_reversion": {
+            "interval": "1h", "period": "60d",
+            "ma_period":         50,
+            "entry_z":           2.0,     # fade when |z| >= 2.0 …
+            "max_z":             3.5,     # … but not beyond 3.5 (likely news / trend break)
+            "atr_period":        14,
+            "atr_stop_multiple": 2.0,
+            "min_stop_pct":      0.001,   # ≈ 10 pips on EURUSD
+            "max_stop_pct":      0.01,
+            "min_atr_pct":       0.0003,
+            "max_atr_pct":       0.005,
+            "max_atr_expansion": 2.0,     # skip when ATR > 2× its recent average (blow-off)
+            "atr_expansion_lookback": 100,
+            "reward_risk":       2.0,
+            # "london_ny_overlap" (default) | "london_or_ny" | "any" — evaluated in
+            # Europe/London and America/New_York local time (DST-correct).
+            "session":           "london_ny_overlap",
+            "max_bar_age_hours": 3,
         },
     },
     # IBKR

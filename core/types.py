@@ -78,6 +78,14 @@ class RawSignal:
     raw_text:        str               = ""
     supplier:        str               = ""
     hermes_signal_type: str            = ""
+    # ── Technical (FX / index) signals — cTrader path only ──────────────────
+    # Stock/news signals leave these at their defaults, so the IBKR path is
+    # untouched. core/fx_signals.py fills them for FX majors / index CFDs.
+    trade_side:      str               = ""      # "BUY" | "SELL" | "" (= infer from category)
+    stop_distance:   Optional[float]   = None    # absolute price distance entry→stop (ATR-based)
+    reward_risk:     Optional[float]   = None    # take-profit = stop_distance × this
+    reference_price: Optional[float]   = None    # last close the setup was computed on
+    strategy:        str               = ""      # e.g. "breakout" | "mean_reversion"
 
 
 # ---------------------------------------------------------------------------
@@ -110,6 +118,14 @@ class FilteredSignal:
     def raw_text(self) -> str:            return self.original.raw_text
     @property
     def published_at(self) -> datetime:   return self.original.published_at
+    @property
+    def trade_side(self) -> str:          return self.original.trade_side
+    @property
+    def stop_distance(self) -> Optional[float]: return self.original.stop_distance
+    @property
+    def reward_risk(self) -> Optional[float]:   return self.original.reward_risk
+    @property
+    def reference_price(self) -> Optional[float]: return self.original.reference_price
 
 
 # ---------------------------------------------------------------------------
@@ -163,6 +179,14 @@ class SizedSignal:
     def supplier(self) -> str:             return self.original.supplier
     @property
     def headline(self) -> str:             return self.original.headline
+    @property
+    def trade_side(self) -> str:           return self.original.trade_side
+    @property
+    def stop_distance(self) -> Optional[float]: return self.original.stop_distance
+    @property
+    def reward_risk(self) -> Optional[float]:   return self.original.reward_risk
+    @property
+    def reference_price(self) -> Optional[float]: return self.original.reference_price
 
 
 # ---------------------------------------------------------------------------

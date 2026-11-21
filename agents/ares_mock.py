@@ -25,8 +25,13 @@ class AresMockAgent:
         account_equity: float = 100_000.0,
         stop_loss_pct: float = 0.03,
         take_profit_pct: float = 0.06,
+        risk_per_trade_pct: Optional[float] = None,
     ):
         self.slippage_bps    = slippage_bps
+        # Set by ZEUS only when broker == "ctrader": technical signals that carry
+        # a stop are then risk-sized (equity × risk / stop distance) like the
+        # real cTrader path. None → stock behaviour, exactly as before.
+        self.risk_per_trade_pct = risk_per_trade_pct
         self.account_equity  = account_equity
         self.stop_loss_pct   = stop_loss_pct
         self.take_profit_pct = take_profit_pct
@@ -42,21 +47,41 @@ class AresMockAgent:
             return self._null_result()
 
         symbol = sized.affected_tickers[0]
-        mid    = self._get_price(symbol)
+        signal_stop = getattr(sized, "stop_distance", None)
+        ref_price   = getattr(sized, "reference_price", None)
+        # Technical (FX/index) signals carry the close they were computed on —
+        # logical names like EURUSD are not yfinance tickers.
+        mid = float(ref_price) if (signal_stop and ref_price) else self._get_price(symbol)
         if mid is None:
             return self._null_result()
 
         slippage   = mid * (self.slippage_bps / 10_000) * random.choice([-1, 1])
-        fill_price = round(mid + slippage, 4)
-        qty        = max(1, int(self.account_equity * sized.position_size_pct / fill_price))
-        is_long    = sized.category != SignalCategory.SUPPLIER_DISRUPTION
+        trade_side = getattr(sized, "trade_side", "") or ""
+        if trade_side in ("BUY", "SELL"):
+            is_long = trade_side == "BUY"
+        else:
+            is_long = sized.category != SignalCategory.SUPPLIER_DISRUPTION
         side       = "BUY" if is_long else "SELL"
 
-        stop_price, limit_price = self._compute_stops(symbol, fill_price, is_long)
+        if signal_stop:
+            from core.fx_signals import bracket_from_distance
+            fill_price = round(mid + slippage, 5)
+            rr = float(getattr(sized, "reward_risk", None) or self.take_profit_pct / self.stop_loss_pct)
+            stop_price, limit_price = bracket_from_distance(fill_price, float(signal_stop), is_long, rr, 5)
+        else:
+            fill_price = round(mid + slippage, 4)
+            stop_price, limit_price = self._compute_stops(symbol, fill_price, is_long)
+
+        if signal_stop and self.risk_per_trade_pct:
+            # Simulated risk sizing (ignores venue min lot and FX conversion).
+            risk_pct = min(self.risk_per_trade_pct, sized.position_size_pct)
+            qty = int(self.account_equity * risk_pct / float(signal_stop) * 100) / 100
+        else:
+            qty = max(1, int(self.account_equity * sized.position_size_pct / fill_price))
         order_id = str(uuid.uuid4())[:8]
 
         self._pending.append(order_id)
-        logger.info("[ARES-MOCK] SIMULATED %s %d %s @ %.4f | SL=%.4f TP=%.4f | id=%s",
+        logger.info("[ARES-MOCK] SIMULATED %s %g %s @ %.5g | SL=%.5g TP=%.5g | id=%s",
                     side, qty, symbol, fill_price, stop_price, limit_price, order_id)
 
         return TradeResult(

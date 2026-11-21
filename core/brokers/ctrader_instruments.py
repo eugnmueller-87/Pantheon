@@ -16,8 +16,22 @@ settings.json → "ctrader_instruments" if needed.
 
 Sizing
 ------
-cTrader volume is in 0.01 of a unit: protocol 1000 == 10.00 units. Position
-size is UNLEVERED notional by default:
+cTrader volume is in 0.01 of a unit: protocol 1000 == 10.00 units.
+
+DEFAULT (ctrader.sizing_mode = "risk") — risk-based, see compute_risk_volume():
+
+    risk_amount   = equity * risk_pct                       (1% default)
+    loss_per_unit = |entry - stop| * quote_to_account       (account ccy lost per 1.00 unit)
+    units         = risk_amount / loss_per_unit  → floored to the venue step grid
+    below min lot → use min lot only if its loss <= risk_amount * max_min_lot_risk_overshoot
+    notional      > equity * ESMA cap → shrink to the cap (skip if even the min lot exceeds it)
+
+The resulting NOTIONAL can exceed equity (e.g. 1% risk with a 0.25% stop ≈ 4×
+equity notional) — that is the point of risk sizing, and the ESMA cap still
+bounds it. What is bounded at 1% is the LOSS at the stop, which is what the
+Argus 8% drawdown kill is about.
+
+LEGACY (ctrader.sizing_mode = "notional") — compute_volume(): UNLEVERED notional:
 
     notional_acct = default_account_equity * position_size_pct * sizing_leverage
     units         = notional_acct / (price * quote_to_account_rate)
@@ -252,6 +266,118 @@ def compute_volume(
             f"1:{inst.leverage_cap:g} on equity {equity:.2f}"
         )
     return volume
+
+
+@dataclass
+class RiskSizing:
+    """Outcome of compute_risk_volume (all money values in account currency)."""
+    volume:             int      # protocol volume (0.01 units)
+    units:              float
+    risk_budget:        float    # equity × risk_pct
+    risk_at_stop:       float    # loss if the stop is hit at the final volume
+    notional:           float    # final volume × price × quote_to_account
+    loss_per_unit:      float    # account-ccy loss per 1.00 unit at the stop
+    equity:             float    # equity the trade was sized on
+    used_min_lot:       bool = False
+    capped_by_leverage: bool = False
+
+    @property
+    def notional_fraction(self) -> float:
+        """Notional as a fraction of equity (what ZEUS's budget logic reasons about)."""
+        return self.notional / self.equity if self.equity else 0.0
+
+
+def compute_risk_volume(
+    *,
+    equity: float,
+    risk_pct: float,
+    entry: float,
+    stop: float,
+    quote_to_account: Optional[float],
+    spec: SymbolSpec,
+    inst: Instrument,
+    max_min_lot_risk_overshoot: float = 1.5,
+) -> RiskSizing:
+    """Risk-based cTrader sizing. Pure — no network.
+
+    Rules (one consistent policy, tested in tests/test_risk_sizing.py):
+      1. units = equity × risk_pct / (|entry − stop| × quote_to_account), floored to step.
+      2. Below the venue minimum: use the minimum ONLY if the min lot's loss at
+         the stop is <= risk budget × max_min_lot_risk_overshoot; else reject.
+      3. ESMA: if notional > equity × leverage cap, SHRINK to the largest valid
+         volume under the cap (risk goes down, never up). If even the minimum
+         lot exceeds the cap, reject.
+      4. Missing / invalid conversion rate, price or stop → reject (fail closed).
+
+    Raises BrokerRejectedError with a human-readable reason on every reject.
+    """
+    name = inst.logical
+    if quote_to_account is None or not quote_to_account or quote_to_account <= 0:
+        raise BrokerRejectedError(
+            f"{name}: no {inst.quote_ccy}→account conversion rate — refusing to size (fail closed)"
+        )
+    if entry <= 0 or stop <= 0:
+        raise BrokerRejectedError(f"{name}: invalid entry/stop {entry} / {stop}")
+    if equity <= 0 or risk_pct <= 0:
+        raise BrokerRejectedError(f"{name}: invalid equity/risk_pct {equity} / {risk_pct}")
+    stop_distance = abs(entry - stop)
+    if stop_distance <= 0:
+        raise BrokerRejectedError(f"{name}: stop equals entry — cannot risk-size")
+
+    loss_per_unit = stop_distance * quote_to_account
+    unit_value    = entry * quote_to_account
+    risk_budget   = equity * risk_pct
+    # (1 + 1e-9): absorb float noise like 1.08 − 1.077 = 0.0030000000000001 so an
+    # exact-grid size is not floored one step down. Far below any venue step.
+    raw_units     = risk_budget / loss_per_unit * (1 + 1e-9)
+    volume        = round_volume(units_to_volume(raw_units), spec)
+    used_min_lot  = False
+
+    if volume == 0:
+        min_units     = volume_to_units(spec.min_volume)
+        min_lot_risk  = min_units * loss_per_unit
+        allowed       = risk_budget * max_min_lot_risk_overshoot
+        if min_lot_risk <= allowed:
+            volume, used_min_lot = spec.min_volume, True
+        else:
+            raise BrokerRejectedError(
+                f"{name}: risk-sized {raw_units:g} units is below the venue minimum "
+                f"({min_units:g} units). Intended risk {risk_budget:.2f}, min-lot risk "
+                f"{min_lot_risk:.2f} > tolerance {max_min_lot_risk_overshoot:g}× "
+                f"(= {allowed:.2f}) — order not placed"
+            )
+
+    capped    = False
+    legal_max = equity * inst.leverage_cap
+    if volume_to_units(volume) * unit_value > legal_max:
+        cap_volume = round_volume(units_to_volume(legal_max / unit_value), spec)
+        if cap_volume == 0:
+            raise BrokerRejectedError(
+                f"{name}: even the minimum lot ({volume_to_units(spec.min_volume):g} units ≈ "
+                f"{volume_to_units(spec.min_volume) * unit_value:.2f}) exceeds the ESMA cap "
+                f"1:{inst.leverage_cap:g} on equity {equity:.2f} — order not placed"
+            )
+        volume, capped = cap_volume, True
+
+    units = volume_to_units(volume)
+    return RiskSizing(
+        volume=volume, units=units, risk_budget=risk_budget,
+        risk_at_stop=units * loss_per_unit, notional=units * unit_value,
+        loss_per_unit=loss_per_unit, equity=equity, used_min_lot=used_min_lot,
+        capped_by_leverage=capped,
+    )
+
+
+def estimate_risk_notional_fraction(risk_pct: float, entry: float, stop_distance: float) -> float:
+    """Notional / equity implied by risk sizing, BEFORE venue rounding.
+
+    notional/equity = risk_pct × entry / stop_distance (the FX conversion
+    cancels). Used by ZEUS to log/check what a risk-sized trade deploys without
+    a live venue connection.
+    """
+    if entry <= 0 or stop_distance <= 0:
+        return 0.0
+    return risk_pct * entry / stop_distance
 
 
 def relative_distance(entry: float, level: float, digits: int) -> int:

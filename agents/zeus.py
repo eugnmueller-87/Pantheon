@@ -156,12 +156,27 @@ class ZeusOrchestrator:
         if self.config.anthropic_model_debate == "claude-sonnet-4-6":
             self.config.anthropic_model_debate = str(_s.get("anthropic_model_debate", "claude-sonnet-4-6"))
 
+        # Broker selection — env BROKER > settings/ZeusConfig.broker > "ibkr".
+        # Resolved BEFORE equity: the cTrader venue may carry its own equity.
+        self.config.broker = (os.getenv("BROKER") or self.config.broker or "ibkr").strip().lower()
+        if self.config.broker not in ("ibkr", "ctrader"):
+            raise ValueError(f"BROKER must be 'ibkr' or 'ctrader', got {self.config.broker!r}")
+        self._ctrader_cfg: dict = dict(_s.get("ctrader") or {})
+
         # Account equity — single source of truth for stage gate AND € sizing.
         # Prefer explicit config; else settings.json. FAIL CLOSED if neither
         # provides it: a money-sizing system must never guess a balance.
         if self.config.default_account_equity is None:
             _eq = _s.get("account_equity", _s.get("default_account_equity"))
             self.config.default_account_equity = float(_eq) if _eq is not None else None
+        # cTrader-only override (e.g. a €500 demo): env CTRADER_ACCOUNT_EQUITY >
+        # settings ctrader.account_equity > the global value above. The IBKR
+        # path never reads these, so its €4,000 default is untouched.
+        if self.config.broker == "ctrader":
+            _ct_eq = os.getenv("CTRADER_ACCOUNT_EQUITY") or self._ctrader_cfg.get("account_equity")
+            if _ct_eq not in (None, ""):
+                self.config.default_account_equity = float(_ct_eq)
+                logger.info("[ZEUS] cTrader account equity override: %.2f", self.config.default_account_equity)
         if self.config.default_account_equity is None or self.config.default_account_equity <= 0:
             raise ValueError(
                 "account equity is not configured — set 'default_account_equity' "
@@ -183,8 +198,13 @@ class ZeusOrchestrator:
         # Agents — ZEUS holds the only references
         # Apollo first so its get_ticker resolver can be injected into Icarus
         self.apollo    = ApolloAgent(knowledge_base=self.kb)
+        # Signal universe follows the venue: cTrader → FX/index technical
+        # setups (core/fx_signals.py); IBKR → Supabase stock signals (unchanged).
+        from core.fx_signals import resolve_signal_universe
+        self.signal_universe = resolve_signal_universe(self.config.broker, _s)
         self.icarus    = IcarusAgent(
             ticker_resolver=self.apollo.get_ticker,
+            signal_universe=self.signal_universe,
         )
         self.hades     = HadesAgent()
         self.artemis   = ArtemisAgent()
@@ -232,11 +252,8 @@ class ZeusOrchestrator:
                                _ib_port, self.config.ib_paper_port)
                 _ib_port = self.config.ib_paper_port
 
-        # Broker selection — env BROKER > settings/ZeusConfig.broker > "ibkr".
-        # mock_execution=True never builds a real broker and needs no credentials.
-        self.config.broker = (os.getenv("BROKER") or self.config.broker or "ibkr").strip().lower()
-        if self.config.broker not in ("ibkr", "ctrader"):
-            raise ValueError(f"BROKER must be 'ibkr' or 'ctrader', got {self.config.broker!r}")
+        # Broker was resolved above. mock_execution=True never builds a real
+        # broker and needs no credentials.
         # One persistent cTrader session shared by Ares + Argus. None → each
         # agent builds its own IbkrAdapter (clientId 1 / 2) exactly as before.
         self.broker: Optional[BrokerAdapter] = None
@@ -248,6 +265,10 @@ class ZeusOrchestrator:
                 account_equity=self.config.default_account_equity,
                 stop_loss_pct=self.config.stop_loss_pct,
                 take_profit_pct=self.config.take_profit_pct,
+                risk_per_trade_pct=(
+                    float(self._ctrader_cfg.get("risk_per_trade_pct", 0.01))
+                    if self._uses_risk_sizing else None
+                ),
             )
             if self.config.mock_execution
             else AresAgent(
@@ -328,6 +349,9 @@ class ZeusOrchestrator:
             account_currency=cfg.get("account_currency", "EUR"),
             sizing_leverage=float(cfg.get("sizing_leverage", 1.0)),
             max_min_lot_overshoot=float(cfg.get("max_min_lot_overshoot", 1.5)),
+            sizing_mode=cfg.get("sizing_mode", "risk"),
+            risk_per_trade_pct=float(cfg.get("risk_per_trade_pct", 0.01)),
+            max_min_lot_risk_overshoot=float(cfg.get("max_min_lot_risk_overshoot", 1.5)),
             entry_order_type=cfg.get("entry_order_type", "MARKET"),
             heartbeat_interval=float(cfg.get("heartbeat_interval_s", 9.0)),
             request_timeout=float(cfg.get("request_timeout_s", 10.0)),
@@ -363,6 +387,42 @@ class ZeusOrchestrator:
                 "[ZEUS] Model dry-run FAILED for '%s': %s. Refusing to start — "
                 "fix anthropic_model_director in settings.json / the API key.", model, exc)
             raise RuntimeError(f"Anthropic model '{model}' unusable: {exc}") from exc
+
+    @property
+    def _uses_risk_sizing(self) -> bool:
+        """True on the cTrader path with risk-based sizing (the default there)."""
+        cfg = getattr(self, "_ctrader_cfg", None) or {}
+        return (getattr(self.config, "broker", "ibkr") == "ctrader"
+                and str(cfg.get("sizing_mode", "risk")).lower() == "risk")
+
+    def _check_risk_budget(self, sized: SizedSignal, equity: float) -> Optional[str]:
+        """cTrader budget gate in RISK terms (replaces the notional
+        max_deployed_pct check, which would block every risk-sized CFD trade:
+        1% risk on a 0.3% stop is ~3.3× equity notional).
+
+        Open risk is estimated conservatively as open positions × the full
+        per-trade risk budget. Returns a kill reason, or None to proceed.
+        """
+        from core.brokers.ctrader_instruments import estimate_risk_notional_fraction
+        risk_cfg   = float(self._ctrader_cfg.get("risk_per_trade_pct", 0.01))
+        max_open   = float(self._ctrader_cfg.get("max_open_risk_pct", 0.03))
+        trade_risk = min(risk_cfg, float(sized.position_size_pct))
+        open_n     = self.argus.open_position_count()
+        open_risk  = open_n * risk_cfg
+        est_notional = 0.0
+        if sized.stop_distance and sized.reference_price:
+            est_notional = estimate_risk_notional_fraction(trade_risk, sized.reference_price, sized.stop_distance)
+        logger.info(
+            "[ZEUS] Risk budget — trade risk %.2f%% (€%.2f) + open risk %.2f%% (%d pos) vs cap %.2f%% | "
+            "est. notional %.2fx equity (ESMA cap enforced at sizing)",
+            trade_risk * 100, equity * trade_risk, open_risk * 100, open_n, max_open * 100, est_notional,
+        )
+        if open_risk + trade_risk > max_open + 1e-12:
+            return (
+                f"risk budget: open risk {open_risk:.2%} ({open_n} pos × {risk_cfg:.2%}) + "
+                f"this trade {trade_risk:.2%} > cap {max_open:.2%} of €{equity:,.0f}"
+            )
+        return None
 
     def _budget_equity(self) -> float:
         """Equity the budget cap is computed against. Prefer LIVE equity from
@@ -690,19 +750,31 @@ class ZeusOrchestrator:
         # also fails SAFE when IB is down (committed_capital reads the DB, not a
         # live position count that silently returns 0 when the broker is gone).
         equity        = self._budget_equity()
-        committed     = self.argus.committed_capital()
-        trade_cost    = equity * sized.position_size_pct
-        max_deployed  = equity * self.config.max_deployed_pct
-        if committed + trade_cost > max_deployed:
-            trace.killed_at_stage = "zeus"
-            trace.kill_reason = (
-                f"budget: would deploy €{committed + trade_cost:,.0f} of €{equity:,.0f} "
-                f"(cap €{max_deployed:,.0f} @ {self.config.max_deployed_pct:.0%}); "
-                f"€{self.argus.available_cash():,.0f} cash free"
-            )
-            logger.info("[ZEUS] Trade rejected on budget — %s", trace.kill_reason)
-            self._write_trace(trace)
-            return run.kill("zeus", trace.kill_reason, trace)
+        if self._uses_risk_sizing:
+            # cTrader: position_size_pct is a ceiling on the fraction of equity
+            # RISKED at the stop, not a notional fraction — check risk, not notional.
+            risk_kill = self._check_risk_budget(sized, equity)
+            if risk_kill:
+                trace.killed_at_stage = "zeus"
+                trace.kill_reason     = risk_kill
+                logger.info("[ZEUS] Trade rejected on risk budget — %s", risk_kill)
+                self._write_trace(trace)
+                return run.kill("zeus", risk_kill, trace)
+        else:
+            # IBKR (unchanged): notional deployed capital vs max_deployed_pct.
+            committed     = self.argus.committed_capital()
+            trade_cost    = equity * sized.position_size_pct
+            max_deployed  = equity * self.config.max_deployed_pct
+            if committed + trade_cost > max_deployed:
+                trace.killed_at_stage = "zeus"
+                trace.kill_reason = (
+                    f"budget: would deploy €{committed + trade_cost:,.0f} of €{equity:,.0f} "
+                    f"(cap €{max_deployed:,.0f} @ {self.config.max_deployed_pct:.0%}); "
+                    f"€{self.argus.available_cash():,.0f} cash free"
+                )
+                logger.info("[ZEUS] Trade rejected on budget — %s", trace.kill_reason)
+                self._write_trace(trace)
+                return run.kill("zeus", trace.kill_reason, trace)
 
         # Stage 5b — Seniority position size ceiling
         if self._seniority_report is not None:
@@ -1098,6 +1170,17 @@ LIVE COMPANY INTELLIGENCE (fetched by Apollo right now)
 """
 
         # Adversarial debate — bull built the case, bear rebutted it
+        technical_section = ""
+        if getattr(sized, "trade_side", "") and getattr(sized, "stop_distance", None):
+            _ct = getattr(self, "_ctrader_cfg", None) or {}
+            _risk = min(float(_ct.get("risk_per_trade_pct", 0.01)), sized.position_size_pct)
+            technical_section = (
+                f"\nTechnical setup:       {sized.original.original.strategy or 'technical'} "
+                f"{sized.trade_side} @ {sized.reference_price:g} | stop distance {sized.stop_distance:g} | "
+                f"target {sized.reward_risk or 2:g}R\n"
+                f"Venue sizing (cTrader): RISK-based — about {_risk*100:.2f}% of equity is lost if the stop is hit; "
+                f"the 'proposed size' above is a ceiling on that risk, NOT a notional fraction."
+            )
         debate_section = ""
         if bull_case or bear_case:
             debate_section = f"""
@@ -1141,7 +1224,7 @@ TEAM ASSESSMENT SUMMARY
 Compliance (Hades):    score {sized.original.compliance_score:.2f}/1.0 | {'; '.join(sized.original.notes) or 'clean'}
 Macro (Artemis):       regime={macro.regime.value} | VIX={_fmt_vix(macro.vix)} | SPY 1m={macro.sp500_1m_return*100:.1f}%
                        sector momentum: {macro.sector_momentum}
-Quant sizing (Pythia): pattern confidence={sized.confidence:.2f} | proposed size={sized.position_size_pct*100:.2f}%
+Quant sizing (Pythia): pattern confidence={sized.confidence:.2f} | proposed size={sized.position_size_pct*100:.2f}%{technical_section}
 
 ═══════════════════════════════════════════════
 PORTFOLIO STATE & THIS CYCLE'S DECISIONS (from Argus)

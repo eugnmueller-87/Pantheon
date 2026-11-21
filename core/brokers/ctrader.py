@@ -68,7 +68,9 @@ from core.brokers.ctrader_instruments import (
     DEFAULT_TICKER_ALIASES,
     PRICE_SCALE,
     Instrument,
+    RiskSizing,
     SymbolSpec,
+    compute_risk_volume,
     compute_volume,
     effective_leverage,
     load_instruments,
@@ -408,6 +410,9 @@ class CTraderAdapter:
         account_currency: str = "EUR",
         sizing_leverage: float = 1.0,
         max_min_lot_overshoot: float = 1.5,
+        sizing_mode: str = "risk",
+        risk_per_trade_pct: float = 0.01,
+        max_min_lot_risk_overshoot: float = 1.5,
         entry_order_type: str = "MARKET",
         heartbeat_interval: float = 9.0,
         request_timeout: float = 10.0,
@@ -429,6 +434,17 @@ class CTraderAdapter:
         self.account_currency   = account_currency.upper()
         self.sizing_leverage    = float(sizing_leverage)
         self.max_min_lot_overshoot = float(max_min_lot_overshoot)
+        # "risk" (default): Ares sizes from the stop via size_order_risk().
+        # "notional" (legacy): Ares uses size_order() as before.
+        self.sizing_mode        = str(sizing_mode or "risk").lower()
+        if self.sizing_mode not in ("risk", "notional"):
+            raise BrokerConfigError(f"ctrader.sizing_mode must be 'risk' or 'notional', got {sizing_mode!r}")
+        self.risk_per_trade_pct = float(risk_per_trade_pct)
+        if not 0 < self.risk_per_trade_pct <= 0.05:
+            raise BrokerConfigError(
+                f"ctrader.risk_per_trade_pct={risk_per_trade_pct} outside (0, 0.05] — refusing to start"
+            )
+        self.max_min_lot_risk_overshoot = float(max_min_lot_risk_overshoot)
         self.entry_order_type   = entry_order_type.upper()
         self.request_timeout    = request_timeout
         self.connect_timeout    = connect_timeout
@@ -870,6 +886,39 @@ class CTraderAdapter:
             volume, spec.min_volume, spec.step_volume,
         )
         return units
+
+    def size_order_risk(
+        self,
+        symbol: str,
+        entry: float,
+        stop_loss: float,
+        risk_pct: Optional[float] = None,
+    ) -> RiskSizing:
+        """Risk-based sizing: lose ≈ equity × risk_pct if the stop is hit.
+
+        risk_pct defaults to (and is clamped at) risk_per_trade_pct. Fails
+        closed (BrokerRejectedError) on a missing conversion pair, a min lot
+        beyond the risk tolerance, or a min lot beyond the ESMA cap.
+        """
+        inst = self._instrument(symbol)
+        spec = self._spec(self._symbol_id(symbol))
+        pct  = self.risk_per_trade_pct if risk_pct is None else min(float(risk_pct), self.risk_per_trade_pct)
+        q2a  = self.quote_to_account_rate(inst.quote_ccy)   # raises when the pair is missing
+        sizing = compute_risk_volume(
+            equity=self.account_equity, risk_pct=pct, entry=entry, stop=stop_loss,
+            quote_to_account=q2a, spec=spec, inst=inst,
+            max_min_lot_risk_overshoot=self.max_min_lot_risk_overshoot,
+        )
+        logger.info(
+            "[CTRADER] Risk-size %s: equity=%.2f risk=%.2f%% (%.2f %s) stop=%g → %g units "
+            "(volume=%d, min=%d step=%d) risk@stop=%.2f notional=%.2f (%.2fx equity, cap 1:%g)%s%s",
+            inst.logical, self.account_equity, pct * 100, sizing.risk_budget, self.account_currency,
+            abs(entry - stop_loss), sizing.units, sizing.volume, spec.min_volume, spec.step_volume,
+            sizing.risk_at_stop, sizing.notional, sizing.notional_fraction, inst.leverage_cap,
+            " [min lot]" if sizing.used_min_lot else "",
+            " [shrunk to ESMA cap]" if sizing.capped_by_leverage else "",
+        )
+        return sizing
 
     # ── orders ──────────────────────────────────────────────────────────────
 

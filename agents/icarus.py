@@ -458,6 +458,8 @@ class IcarusAgent:
         api_key: Optional[str] = None,
         base_url: str = HERMES_BASE_URL,
         ticker_resolver=None,
+        signal_universe: Optional[str] = None,
+        fx_generator=None,
     ):
         self._api_key  = api_key or os.getenv("HERMES_API_KEY", "")
         self._base_url = base_url.rstrip("/")
@@ -469,6 +471,20 @@ class IcarusAgent:
         # Optional callable(supplier_name) -> ticker | None injected by Zeus
         # Falls back to the static _resolve_ticker when not provided
         self._ticker_resolver = ticker_resolver or _resolve_ticker
+        # Signal universe: "stock" (Supabase EDGAR/Finnhub, the IBKR path) or
+        # "fx" (FX majors + index CFDs, the cTrader path). ZEUS passes it
+        # explicitly; when omitted it is derived from env BROKER / settings.
+        if signal_universe is None:
+            from config.settings import load_settings
+            from core.fx_signals import resolve_broker, resolve_signal_universe
+            _s = load_settings()
+            signal_universe = resolve_signal_universe(resolve_broker(_s), _s)
+        if signal_universe not in ("stock", "fx"):
+            raise ValueError(f"signal_universe must be 'stock' or 'fx', got {signal_universe!r}")
+        self.signal_universe = signal_universe
+        self._fx_generator = fx_generator   # built lazily on first fx fetch
+        if self.signal_universe == "fx":
+            logger.info("[ICARUS] Signal universe = FX/index (cTrader) — stock signals disabled.")
         if not self._api_key:
             logger.warning("[ICARUS] HERMES_API_KEY not set — requests will be rejected.")
 
@@ -514,7 +530,11 @@ class IcarusAgent:
         return n
 
     def health(self) -> AgentHealth:
-        """Healthy when Supabase is reachable (Hermes Railway is retired)."""
+        """Healthy when Supabase is reachable (Hermes Railway is retired).
+        The FX/index path needs no Supabase — bars are fetched per cycle and a
+        data failure just yields no signals."""
+        if self.signal_universe == "fx":
+            return AgentHealth.HEALTHY
         try:
             import core.supabase_client as supa
             supa.get_client()  # verify connection — raises if env vars missing
@@ -530,7 +550,13 @@ class IcarusAgent:
         """
         Fetch new signals from Supabase (written by the Hermes Supabase worker).
         Hermes Railway API fallback is only used when HERMES_FALLBACK_ENABLED=true.
+
+        On the cTrader path (signal_universe == "fx") the FX/index generator
+        REPLACES the stock sources — see core/fx_signals.py.
         """
+        if self.signal_universe == "fx":
+            return self._fetch_fx()
+
         signals = self._fetch_from_supabase()
 
         # Optional Railway fallback — disabled by default (Hermes retired)
@@ -543,6 +569,23 @@ class IcarusAgent:
 
         logger.info("[ICARUS] %d new signal(s) ready for Zeus.", len(signals))
 
+        return signals
+
+    def _fetch_fx(self) -> list[RawSignal]:
+        """Technical setups for the cTrader universe. One signal per instrument
+        per bar at most: the deterministic signal_id is de-duplicated through
+        the same seen-set the stock path uses."""
+        if self._fx_generator is None:
+            from core.fx_signals import FxSignalGenerator
+            self._fx_generator = FxSignalGenerator()
+        signals: list[RawSignal] = []
+        for sig in self._fx_generator.generate():
+            if self._is_seen(sig.signal_id):
+                logger.debug("[ICARUS] FX setup %s already emitted — skipping", sig.signal_id)
+                continue
+            self._mark_seen(sig.signal_id)
+            signals.append(sig)
+        logger.info("[ICARUS] %d new FX/index signal(s) ready for Zeus.", len(signals))
         return signals
 
     def fetch_company(self, company: str) -> list[RawSignal]:
