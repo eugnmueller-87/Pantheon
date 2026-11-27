@@ -32,11 +32,14 @@ os.environ.pop("SUPABASE_SERVICE_ROLE_KEY", None)
 #                 CTRADER_ENV, trailing/pyramid/risk-ramp switches) change what
 #                 the broker tests assert, e.g. a demo equity of 500 instead of
 #                 the 4000 default. Tests that need them set them explicitly.
+#   - FRED_API_KEY  makes Apollo's historical pipeline take the FRED path
+#                 instead of the yfinance VIX fallback the tests expect.
 # Entries are fnmatch patterns, so "CTRADER_*" covers every cTrader variable.
 _BLOCKED_ENV_VARS = (
     "SUPABASE_URL",
     "SUPABASE_SERVICE_ROLE_KEY",
     "CTRADER_*",
+    "FRED_API_KEY",
 )
 
 
