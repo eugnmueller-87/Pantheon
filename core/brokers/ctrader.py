@@ -193,6 +193,40 @@ def _payload_name(msg: Any) -> str:
     return type(msg).__name__
 
 
+def _is_cancellation(exc: BaseException) -> bool:
+    """True if `exc` is, or wraps via __cause__/__context__, a cancelled
+    Future or Deferred. That is what TwistedTransport.stop() and Twisted's
+    ClientService.stopService() produce for requests still in flight."""
+    kinds: tuple[type, ...] = (concurrent.futures.CancelledError,)
+    try:
+        from twisted.internet.defer import CancelledError as DeferredCancelled
+        kinds += (DeferredCancelled,)
+    except ImportError:  # pragma: no cover - exercised only without the SDK
+        pass
+    seen: set[int] = set()
+    cur: Optional[BaseException] = exc
+    while cur is not None and id(cur) not in seen:
+        if isinstance(cur, kinds):
+            return True
+        seen.add(id(cur))
+        cur = cur.__cause__ or cur.__context__
+    return False
+
+
+def _settle(fut: concurrent.futures.Future, *, result: Any = None, error: Optional[BaseException] = None) -> None:
+    """Resolve `fut` unless stop() already cancelled it (no InvalidStateError
+    may escape into a Deferred chain, Twisted would print it as unhandled)."""
+    if fut.done():
+        return
+    try:
+        if error is None:
+            fut.set_result(result)
+        else:
+            fut.set_exception(error)
+    except concurrent.futures.InvalidStateError:
+        pass
+
+
 # ---------------------------------------------------------------------------
 # Twisted transport — the ONLY code that touches the reactor
 # ---------------------------------------------------------------------------
@@ -288,6 +322,13 @@ class TwistedTransport:
         self._reactor_thread: Optional[threading.Thread] = None
         self._heartbeat: Optional[HeartbeatLoop] = None
         self._connected = threading.Event()
+        # Set by stop(), cleared by start(). While set: request() refuses, and
+        # SDK callbacks (connected → re-auth, disconnected, messages) are
+        # dropped, so a stopped session never starts work after stop() returns.
+        self._stopped = threading.Event()
+        self._pending: set[concurrent.futures.Future] = set()   # request() futures in flight
+        self._pending_lock = threading.Lock()
+        self._cb_local = threading.local()                       # .active on the ctrader-cb worker
         self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="ctrader-cb")
 
     @property
@@ -297,7 +338,30 @@ class TwistedTransport:
     def wait_connected(self, timeout: float) -> bool:
         return self._connected.wait(timeout)
 
+    def _dispatch(self, fn: Callable[..., None], *args: Any) -> None:
+        """Hand an SDK callback to the ctrader-cb worker (called on the reactor thread)."""
+        if self._stopped.is_set():
+            return
+
+        def _run():
+            if self._stopped.is_set():   # queued before stop(), would run after it
+                return
+            self._cb_local.active = True
+            try:
+                fn(*args)
+            finally:
+                self._cb_local.active = False
+
+        try:
+            self._executor.submit(_run)
+        except RuntimeError:
+            # "cannot schedule new futures after interpreter shutdown": an SDK
+            # event raced process exit. Raising here would surface as a Twisted
+            # "Unhandled Error" traceback on the reactor thread.
+            logger.debug("[CTRADER] callback %s dropped: executor is shut down", getattr(fn, "__name__", fn))
+
     def start(self, on_connected, on_disconnected, on_message) -> None:
+        self._stopped.clear()
         self._reactor, self._reactor_thread = _ensure_reactor_thread()
 
         def _start_in_reactor():
@@ -306,12 +370,14 @@ class TwistedTransport:
             client = _make_verified_client(self._reactor, self.host, self.port, self._tls_options)
 
             def _conn(_client):
+                if self._stopped.is_set():
+                    return
                 self._connected.set()
-                self._executor.submit(on_connected)
+                self._dispatch(on_connected)
 
             def _disc(_client, reason):
                 self._connected.clear()
-                self._executor.submit(on_disconnected, str(getattr(reason, "value", reason)))
+                self._dispatch(on_disconnected, str(getattr(reason, "value", reason)))
 
             def _msg(_client, message):
                 if message.payloadType == 51:   # ProtoHeartbeatEvent — SDK already answers
@@ -321,7 +387,7 @@ class TwistedTransport:
                 except Exception as exc:
                     logger.debug("[CTRADER] could not decode payloadType=%s: %s", message.payloadType, exc)
                     return
-                self._executor.submit(on_message, payload)
+                self._dispatch(on_message, payload)
 
             client.setConnectedCallback(_conn)
             client.setDisconnectedCallback(_disc)
@@ -344,36 +410,60 @@ class TwistedTransport:
         """Send `message`, block until its response arrives, return the decoded payload."""
         if threading.current_thread() is self._reactor_thread:
             raise RuntimeError("[CTRADER] request() called on the reactor thread — would deadlock")
+        name = _payload_name(message)
+        if self._stopped.is_set():
+            raise BrokerConnectivityError(f"cTrader {name} refused: transport stopped")
         if self._client is None or self._reactor is None:
             raise BrokerConnectivityError("cTrader transport not started")
         fut: concurrent.futures.Future = concurrent.futures.Future()
 
         def _send():
+            if fut.done():   # stop() cancelled it before it reached the reactor
+                return
             try:
                 d = self._client.send(message, responseTimeoutInSeconds=timeout)
             except Exception as exc:
-                fut.set_exception(exc)
+                _settle(fut, error=exc)
                 return
             d.addCallbacks(
-                lambda m: fut.done() or fut.set_result(m),
-                lambda f: fut.done() or fut.set_exception(f.value),
+                lambda m: _settle(fut, result=m),
+                lambda f: _settle(fut, error=f.value),
             )
 
-        self._reactor.callFromThread(_send)
+        with self._pending_lock:
+            self._pending.add(fut)
         try:
+            self._reactor.callFromThread(_send)
             raw = fut.result(timeout + 2)
+        except concurrent.futures.CancelledError as exc:
+            raise BrokerConnectivityError(f"cTrader {name} cancelled: transport stopped") from exc
         except concurrent.futures.TimeoutError as exc:
-            raise BrokerConnectivityError(f"cTrader {_payload_name(message)} timed out after {timeout}s") from exc
+            raise BrokerConnectivityError(f"cTrader {name} timed out after {timeout}s") from exc
         except BrokerError:
             raise
         except Exception as exc:
-            raise BrokerConnectivityError(
-                f"cTrader {_payload_name(message)} failed: {type(exc).__name__}: {exc}"
-            ) from exc
+            raise BrokerConnectivityError(f"cTrader {name} failed: {type(exc).__name__}: {exc}") from exc
+        finally:
+            with self._pending_lock:
+                self._pending.discard(fut)
         from ctrader_open_api import Protobuf
         return Protobuf.extract(raw)
 
-    def stop(self) -> None:
+    def stop(self, drain_timeout: float = 5.0) -> None:
+        """Stop the session and cancel what it still has running.
+
+        Order matters: mark stopped (no new requests, late SDK callbacks are
+        dropped), cancel in-flight request futures (a re-auth blocked in
+        request() returns at once instead of after its timeout), stop the
+        client service, then wait until the ctrader-cb worker has unwound, so
+        nothing of this session still runs or logs after stop() returns.
+        """
+        self._stopped.set()
+        self._connected.clear()
+        with self._pending_lock:
+            pending = list(self._pending)
+        for fut in pending:
+            fut.cancel()
         if self._reactor is None:
             return
 
@@ -388,7 +478,17 @@ class TwistedTransport:
                 ClientService.stopService(self._client)
 
         self._reactor.callFromThread(_stop)
-        self._connected.clear()
+        self._drain_callbacks(drain_timeout)
+
+    def _drain_callbacks(self, timeout: float) -> None:
+        if getattr(self._cb_local, "active", False):
+            return   # stop() called from a callback: waiting on ourselves would deadlock
+        try:
+            self._executor.submit(lambda: None).result(timeout)
+        except concurrent.futures.TimeoutError:
+            logger.warning("[CTRADER] A callback was still running %.0fs after stop()", timeout)
+        except RuntimeError:
+            pass   # executor already shut down (interpreter exit): nothing left to wait for
 
 
 # ---------------------------------------------------------------------------
@@ -467,6 +567,10 @@ class CTraderAdapter:
         self._auth_lock      = threading.Lock()
         self._app_authed     = False
         self._account_authed = threading.Event()
+        # Set by disconnect(), cleared by connect(). While set, no background
+        # re-auth runs: a reconnect or server event that races the shutdown
+        # must not authorize a session we are closing.
+        self._closing        = threading.Event()
         self._broker_symbols: dict[str, int] = {}       # UPPER broker name -> symbolId
         self._resolved: dict[str, tuple[str, int]] = {} # logical -> (broker name, symbolId)
         self._specs: dict[int, SymbolSpec] = {}
@@ -493,6 +597,7 @@ class CTraderAdapter:
         if self._account_authed.is_set() and self.transport.is_connected:
             self._maybe_refresh_token()
             return self
+        self._closing.clear()
         if not self._started:
             self.transport.start(self._on_connected, self._on_disconnected, self._on_message)
             self._started = True
@@ -504,6 +609,11 @@ class CTraderAdapter:
         return self
 
     def disconnect(self) -> None:
+        """Close the session. The closing flag goes up FIRST, so a re-auth the
+        transport already queued (reconnect, server disconnect event) does not
+        fire afterwards; transport.stop() then cancels requests still in flight
+        and returns once the callback worker has unwound."""
+        self._closing.set()
         self._account_authed.clear()
         self._app_authed = False
         if self._started:
@@ -520,15 +630,18 @@ class CTraderAdapter:
     # ── transport callbacks (run on the ctrader-cb worker, never the reactor) ─
 
     def _on_connected(self) -> None:
+        if self._closing.is_set():
+            logger.debug("[CTRADER] Transport connected during disconnect(), not re-authorizing")
+            return
         logger.info("[CTRADER] Transport connected — authorizing session")
-        try:
-            self._authorize()
-        except Exception as exc:
-            logger.error("[CTRADER] Re-authorization after connect failed: %s", exc)
+        self._reauth("Re-authorization after connect")
 
     def _on_disconnected(self, reason: str) -> None:
         self._account_authed.clear()
         self._app_authed = False
+        if self._closing.is_set():
+            logger.debug("[CTRADER] Disconnected (%s) after disconnect()", reason)
+            return
         logger.warning("[CTRADER] Disconnected (%s) — SDK will reconnect, session will re-authorize", reason)
 
     def _on_message(self, payload: Any) -> None:
@@ -537,6 +650,8 @@ class CTraderAdapter:
             self._record_spot(payload)
         elif name == "ProtoOAExecutionEvent":
             logger.debug("[CTRADER] execution event type=%s", payload.executionType)
+        elif self._closing.is_set():
+            logger.debug("[CTRADER] %s ignored: adapter is disconnecting", name)
         elif name in ("ProtoOAClientDisconnectEvent", "ProtoOAAccountDisconnectEvent"):
             logger.warning("[CTRADER] Server-side disconnect (%s) — will re-authorize", name)
             self._account_authed.clear()
@@ -553,10 +668,30 @@ class CTraderAdapter:
             self._safe_reauth()
 
     def _safe_reauth(self) -> None:
+        self._reauth("Re-authorization")
+
+    def _reauth(self, what: str) -> None:
+        """Background re-auth on the ctrader-cb worker. Never raises.
+
+        If disconnect() overtakes it, its request ends in a CancelledError
+        (concurrent.futures from transport.stop(), or Twisted's from
+        stopService(), usually wrapped in BrokerConnectivityError) or is
+        refused because the transport stopped. That is the shutdown working,
+        so it is caught here and logged at debug, not as an error. Genuine
+        failures while the session is meant to be up still log as errors.
+        """
+        if self._closing.is_set():
+            logger.debug("[CTRADER] %s skipped: adapter is disconnecting", what)
+            return
         try:
             self._authorize()
+        except concurrent.futures.CancelledError as exc:
+            logger.debug("[CTRADER] %s cancelled by disconnect: %s", what, exc)
         except Exception as exc:
-            logger.error("[CTRADER] Re-authorization failed: %s", exc)
+            if self._closing.is_set() or _is_cancellation(exc):
+                logger.debug("[CTRADER] %s cancelled by disconnect: %s", what, exc)
+                return
+            logger.error("[CTRADER] %s failed: %s", what, exc)
 
     # ── auth ────────────────────────────────────────────────────────────────
 
@@ -565,6 +700,8 @@ class CTraderAdapter:
         with self._auth_lock:
             if self._account_authed.is_set():
                 return
+            if self._closing.is_set():   # a re-auth that waited on the lock while disconnect() ran
+                raise BrokerConnectivityError("cTrader session is disconnecting, not authorizing")
             # 1. application
             if not self._app_authed:
                 self._call(msgs.ProtoOAApplicationAuthReq(

@@ -10,6 +10,7 @@ the server drops the connection.
 from __future__ import annotations
 
 import datetime as _dt
+import logging
 import socket
 import ssl as pyssl
 import struct
@@ -63,6 +64,7 @@ class FakeCTraderServer:
         self.sock.listen(5)
         self.port = self.sock.getsockname()[1]
         self.received: list[str] = []
+        self.unanswered: set[str] = set()   # request names the server swallows (hang the client)
         self.heartbeats = 0
         self.connections = 0
         self._conn = None
@@ -100,7 +102,7 @@ class FakeCTraderServer:
                     continue
                 req = Protobuf.extract(msg)
                 self.received.append(type(req).__name__)
-                res = self._respond(req)
+                res = None if type(req).__name__ in self.unanswered else self._respond(req)
                 if res is not None:
                     out = C.ProtoMessage(payloadType=res.payloadType, payload=res.SerializeToString(),
                                          clientMsgId=msg.clientMsgId).SerializeToString()
@@ -182,6 +184,65 @@ def test_real_reactor_auth_heartbeat_and_reconnect(server):
         assert server.received.count("ProtoOAAccountAuthReq") >= 2
     finally:
         adapter.disconnect()
+
+
+def _connected_adapter(server, request_timeout=5):
+    from twisted.internet import ssl as tssl
+
+    opts = tssl.optionsForClientTLS("localhost", trustRoot=tssl.Certificate.loadPEM(server.cert_pem))
+    transport = TwistedTransport("localhost", server.port, heartbeat_interval=0.5, tls_options=opts)
+    adapter = CTraderAdapter(CTraderCredentials.from_env(ENV), account_equity=4000, transport=transport,
+                             connect_timeout=10, request_timeout=request_timeout)
+    adapter.connect()
+    assert adapter.health()
+    return adapter, transport
+
+
+def _ctrader_errors(caplog):
+    return [r for r in caplog.records if r.name == "broker.ctrader" and r.levelno >= logging.ERROR]
+
+
+def test_disconnect_cancels_reauth_that_is_mid_request(server, caplog):
+    """The race behind the smoke test's post-disconnect error: the link drops,
+    the SDK reconnects, re-auth starts and waits on the server, and THEN the
+    script calls disconnect(). The re-auth must end inside disconnect(), not
+    up to request_timeout later, and must not log an error."""
+    adapter, transport = _connected_adapter(server, request_timeout=8)
+    try:
+        server.unanswered.add("ProtoOAApplicationAuthReq")
+        server.drop()
+        assert _wait(lambda: server.received.count("ProtoOAApplicationAuthReq") >= 2, 15), \
+            "re-auth never reached the server"
+    finally:
+        t0 = time.monotonic()
+        adapter.disconnect()
+        elapsed = time.monotonic() - t0
+    time.sleep(0.5)              # anything still running would log now
+    assert elapsed < 3, f"disconnect() took {elapsed:.1f}s"
+    assert not adapter._auth_lock.locked(), "re-auth still running after disconnect()"
+    assert _ctrader_errors(caplog) == []
+    assert adapter.auth_count == 1 and not adapter.authorized
+
+
+def test_disconnect_cancels_reauth_waiting_for_a_reconnect(server, caplog):
+    """Re-auth queued by a server event while the venue is unreachable: its
+    request waits for a connection that never comes. disconnect() must cancel
+    it (a CancelledError underneath) without an error or a traceback."""
+    adapter, transport = _connected_adapter(server)
+    server._stop = True
+    server.sock.close()          # refuse every reconnect attempt
+    server.drop()
+    assert _wait(lambda: not transport.is_connected, 5)
+    reauth = threading.Thread(
+        target=adapter._on_message, args=(M.ProtoOAAccountDisconnectEvent(ctidTraderAccountId=ACC),), daemon=True,
+    )
+    reauth.start()
+    assert _wait(adapter._auth_lock.locked, 5), "re-auth never started"
+    time.sleep(0.2)              # let it reach request() and block on the missing connection
+    adapter.disconnect()
+    reauth.join(3)
+    assert not reauth.is_alive(), "re-auth still running after disconnect()"
+    assert _ctrader_errors(caplog) == []
 
 
 def test_untrusted_certificate_is_refused(server):

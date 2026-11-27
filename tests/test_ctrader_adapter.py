@@ -9,7 +9,10 @@ closing fills, and Ares/Argus driving the adapter.
 
 from __future__ import annotations
 
+import concurrent.futures
 import logging
+import threading
+import time
 from datetime import datetime, timezone
 from unittest.mock import patch
 
@@ -395,6 +398,169 @@ class TestHeartbeatAndReconnect:
         with pytest.raises(BrokerConnectivityError):
             a.reconcile()
         assert not a.health()   # next call re-authorizes
+
+
+# ── shutdown: no re-auth after disconnect() ──────────────────────────────────
+
+def _cancelled_raw():
+    return concurrent.futures.CancelledError()
+
+
+def _cancelled_wrapped():
+    # What TwistedTransport.request() raises when stop() cancels its future.
+    try:
+        raise concurrent.futures.CancelledError()
+    except concurrent.futures.CancelledError as exc:
+        try:
+            raise BrokerConnectivityError("cTrader ProtoOAApplicationAuthReq cancelled: transport stopped") from exc
+        except BrokerConnectivityError as wrapped:
+            return wrapped
+
+
+def _cancelled_deferred():
+    # What stopService() produces for a request still waiting for a connection.
+    from twisted.internet.defer import CancelledError as DeferredCancelled
+    try:
+        raise DeferredCancelled()
+    except DeferredCancelled as exc:
+        try:
+            raise BrokerConnectivityError("cTrader ProtoOAApplicationAuthReq failed: CancelledError: ") from exc
+        except BrokerConnectivityError as wrapped:
+            return wrapped
+
+
+def _ctrader_errors(caplog):
+    return [r for r in caplog.records if r.name == "broker.ctrader" and r.levelno >= logging.ERROR]
+
+
+class TestShutdown:
+    def test_late_connected_callback_after_disconnect_does_not_reauthorize(self):
+        a, t = _adapter()
+        a.connect()
+        a.disconnect()
+        t.sent.clear()
+        t._connected_flag = True
+        t.cb[0]()                       # the SDK's reconnect loop fires after we closed
+        assert t.sent == [] and not a.authorized and a.auth_count == 1
+
+    @pytest.mark.parametrize("event", [
+        M.ProtoOAAccountDisconnectEvent(ctidTraderAccountId=ACC),
+        M.ProtoOAClientDisconnectEvent(reason="bye"),
+        M.ProtoOAAccountsTokenInvalidatedEvent(ctidTraderAccountIds=[ACC], reason="x"),
+    ])
+    def test_server_events_after_disconnect_do_not_reauthorize(self, event):
+        a, t = _adapter()
+        a.connect()
+        a.disconnect()
+        t.sent.clear()
+        t.cb[2](event)
+        assert t.sent == [] and not a.authorized   # no re-auth, no token refresh
+
+    @pytest.mark.parametrize("make_error", [_cancelled_raw, _cancelled_wrapped, _cancelled_deferred],
+                             ids=["raw-future-cancel", "wrapped-future-cancel", "wrapped-deferred-cancel"])
+    def test_reauth_overtaken_by_disconnect_is_caught_quietly(self, caplog, make_error):
+        a, t = _adapter()
+        a.connect()
+        t.simulate_disconnect()
+
+        def _auth_req(m):
+            a.disconnect()              # the main thread closes while re-auth is mid-request
+            raise make_error()
+
+        t._r_ProtoOAApplicationAuthReq = _auth_req
+        t._connected_flag = True
+        with caplog.at_level(logging.DEBUG, logger="broker.ctrader"):
+            t.cb[0]()                   # must not raise
+        assert _ctrader_errors(caplog) == []
+        assert not a.authorized and a.auth_count == 1
+
+    def test_cancellation_without_disconnect_is_not_an_error_either(self, caplog):
+        # stopService() can cancel before disconnect() has set its flag.
+        a, t = _adapter()
+        a.connect()
+        t.simulate_disconnect()
+
+        def _auth_req(m):
+            raise _cancelled_deferred()
+
+        t._r_ProtoOAApplicationAuthReq = _auth_req
+        t._connected_flag = True
+        t.cb[0]()
+        assert _ctrader_errors(caplog) == []
+
+    def test_genuine_reauth_failure_still_logs_an_error(self, caplog):
+        a, t = _adapter()
+        a.connect()
+        t.simulate_disconnect()
+        t.overrides["ProtoOAApplicationAuthReq"] = [M.ProtoOAErrorRes(errorCode="SERVER_IS_UNDER_MAINTENANCE")]
+        t._connected_flag = True
+        t.cb[0]()
+        [err] = _ctrader_errors(caplog)
+        assert "Re-authorization after connect failed" in err.getMessage()
+
+    def test_connect_after_disconnect_authorizes_again(self):
+        a, t = _adapter()
+        a.connect()
+        a.disconnect()
+        t._connected_flag = True
+        a.connect()
+        assert a.health() and a.auth_count == 2
+
+
+class _InertReactor:
+    """Accepts callFromThread and never runs it: a request that is never answered."""
+
+    def callFromThread(self, fn, *args, **kwargs):
+        pass
+
+
+class TestTransportStop:
+    def test_request_after_stop_is_refused(self):
+        tr = TwistedTransport("demo.ctraderapi.com")
+        tr.stop()
+        with pytest.raises(BrokerConnectivityError, match="transport stopped"):
+            tr.request(M.ProtoOAVersionReq(), 1)
+
+    def test_stop_cancels_a_blocked_request_at_once(self):
+        tr = TwistedTransport("demo.ctraderapi.com")
+        tr._client, tr._reactor = object(), _InertReactor()
+        errors: list = []
+
+        def _blocked():
+            try:
+                tr.request(M.ProtoOAApplicationAuthReq(clientId="c", clientSecret="s"), 30)
+            except BaseException as exc:   # noqa: BLE001 - the test inspects whatever escapes
+                errors.append(exc)
+
+        th = threading.Thread(target=_blocked, daemon=True)
+        th.start()
+        deadline = time.monotonic() + 2
+        while not tr._pending and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert tr._pending, "request never registered"
+        t0 = time.monotonic()
+        tr.stop()
+        th.join(3)
+        assert not th.is_alive() and time.monotonic() - t0 < 3   # not the 30s request timeout
+        [err] = errors
+        assert isinstance(err, BrokerConnectivityError) and "cancelled" in str(err)
+        assert isinstance(err.__cause__, concurrent.futures.CancelledError)
+        assert not tr._pending
+
+    def test_callbacks_are_dropped_once_stopped(self):
+        tr = TwistedTransport("demo.ctraderapi.com")
+        calls: list = []
+        tr._dispatch(calls.append, "before")
+        tr._executor.submit(lambda: None).result(2)
+        tr.stop()
+        tr._dispatch(calls.append, "after")
+        tr._executor.submit(lambda: None).result(2)
+        assert calls == ["before"]
+
+    def test_dispatch_after_executor_shutdown_does_not_raise(self):
+        tr = TwistedTransport("demo.ctraderapi.com")
+        tr._executor.shutdown()
+        tr._dispatch(lambda: None)   # interpreter-exit race: must not raise on the reactor thread
 
 
 # ── symbol mapping ───────────────────────────────────────────────────────────

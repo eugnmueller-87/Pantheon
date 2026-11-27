@@ -8,7 +8,9 @@ Isolation rules:
   - Tests must pass cold (no data/chroma or data/trade_log.db on disk)
 """
 
+import fnmatch
 import os
+from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
@@ -23,32 +25,49 @@ os.environ.setdefault("UPSTASH_REDIS_REST_TOKEN",  "mock-token")
 os.environ.pop("SUPABASE_URL", None)
 os.environ.pop("SUPABASE_SERVICE_ROLE_KEY", None)
 
-# List of env vars that must never be set during tests — importing any module
-# that calls load_dotenv() (e.g. main.py) can inject these from a local .env
-# file and cause PythiaAgent to switch from SQLite to Supabase mid-suite.
+# Env vars that must never be set during tests. Importing any module that calls
+# load_dotenv() (e.g. main.py) can inject these from a local .env file:
+#   - SUPABASE_*  makes PythiaAgent switch from SQLite to Supabase mid-suite.
+#   - CTRADER_*   real credentials and overrides (CTRADER_ACCOUNT_EQUITY,
+#                 CTRADER_ENV, trailing/pyramid/risk-ramp switches) change what
+#                 the broker tests assert, e.g. a demo equity of 500 instead of
+#                 the 4000 default. Tests that need them set them explicitly.
+# Entries are fnmatch patterns, so "CTRADER_*" covers every cTrader variable.
 _BLOCKED_ENV_VARS = (
     "SUPABASE_URL",
     "SUPABASE_SERVICE_ROLE_KEY",
+    "CTRADER_*",
 )
+
+
+def _is_blocked_env(name: str) -> bool:
+    return any(fnmatch.fnmatchcase(name, pattern) for pattern in _BLOCKED_ENV_VARS)
+
+
+@contextmanager
+def _blocked_env():
+    """Remove every blocked var for the duration of the block, then restore
+    exactly: drop blocked vars injected inside it, re-inject the ones that
+    existed before it."""
+    saved = {k: os.environ.pop(k) for k in [k for k in os.environ if _is_blocked_env(k)]}
+    try:
+        yield
+    finally:
+        for k in [k for k in os.environ if _is_blocked_env(k)]:
+            os.environ.pop(k, None)
+        os.environ.update(saved)
 
 
 @pytest.fixture(autouse=True)
 def _block_supabase_env():
     """
-    Re-enforce the Supabase env block before every test and restore the env
-    to its pre-test state afterwards. This prevents any module imported during
-    a test (e.g. main.py via load_dotenv()) from leaking SUPABASE_URL into
-    later tests and causing PythiaAgent to silently switch to Supabase mode.
+    Re-enforce the env block before every test and restore the env to its
+    pre-test state afterwards. This prevents any module imported during a test
+    (e.g. main.py via load_dotenv()) from leaking SUPABASE_URL or CTRADER_*
+    values into this or later tests.
     """
-    saved = {k: os.environ.pop(k, None) for k in _BLOCKED_ENV_VARS}
-    yield
-    # Restore exactly: re-inject only vars that existed before the test ran
-    # (normally None — they were absent), and remove any that were injected.
-    for k, v in saved.items():
-        if v is None:
-            os.environ.pop(k, None)
-        else:
-            os.environ[k] = v
+    with _blocked_env():
+        yield
 
 
 def _make_ticker(close_values):

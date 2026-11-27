@@ -229,3 +229,31 @@ class TestZeusBrokerSelection:
     def test_invalid_broker_name_rejected(self):
         with pytest.raises(ValueError, match="BROKER"):
             _zeus({"BROKER": "alpaca"}, mock_execution=False)
+
+
+class TestEnvBlocklist:
+    """conftest's autouse block must keep a developer's .env CTRADER_* values
+    (e.g. CTRADER_ACCOUNT_EQUITY=500 for a small demo) out of every test."""
+
+    def test_every_ctrader_var_is_blocked_and_restored(self, monkeypatch):
+        from tests.conftest import _blocked_env
+
+        # As if load_dotenv() had injected them before the test started.
+        monkeypatch.setenv("CTRADER_ACCOUNT_EQUITY", "500")
+        monkeypatch.setenv("CTRADER_ENV", "live")
+        monkeypatch.setenv("CTRADER_SOME_FUTURE_SWITCH", "1")
+        with _blocked_env():
+            assert not [k for k in os.environ if k.startswith("CTRADER_")]
+            os.environ["CTRADER_RISK_RAMP"] = "true"          # injected mid-test
+        assert os.environ["CTRADER_ACCOUNT_EQUITY"] == "500"  # pre-test state restored
+        assert os.environ["CTRADER_ENV"] == "live"
+        assert "CTRADER_RISK_RAMP" not in os.environ          # mid-test injection removed
+
+    def test_unrelated_vars_untouched(self, monkeypatch):
+        from tests.conftest import _blocked_env
+
+        monkeypatch.setenv("BROKER", "ctrader")
+        monkeypatch.setenv("XCTRADER_ACCOUNT_EQUITY", "1")   # prefix match only
+        with _blocked_env():
+            assert os.environ["BROKER"] == "ctrader"
+            assert os.environ["XCTRADER_ACCOUNT_EQUITY"] == "1"
